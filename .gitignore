@@ -60,3 +60,19 @@ __pycache__/
 
 # Logs
 *.log
+
+# Python
+*.pyc
+.pytest_cache/
+.ruff_cache/
+
+# Game captures, recordings and run logs (never committed; the repo is public)
+fixtures/
+runs/
+
+# ESP-IDF firmware build output
+firmware/build/
+firmware/sdkconfig
+firmware/sdkconfig.old
+firmware/managed_components/
+firmware/test_host/build/

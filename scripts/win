@@ -1,0 +1,43 @@
+#!/usr/bin/env bash
+# Run a command in the project's Windows-native venv: scripts/win <args...>
+# equals `uv.exe run --project <repo UNC> <args...>` with the repo root as cwd,
+# so relative paths (tests/, runs/, fixtures/) resolve to this single WSL checkout.
+# scripts/win --print-env prints the resolved UV_PROJECT_ENVIRONMENT and exits.
+set -euo pipefail
+
+repo_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)
+repo_unc=$(wslpath -w "$repo_dir")
+
+# cmd.exe started from a WSL (UNC) cwd prints a warning into stdout.
+cd /mnt/c
+
+win_env() {
+    local raw line
+    raw=$(cmd.exe /c "echo %$1%" 2>&1) || true
+    if ! line=$(printf '%s\n' "$raw" | tr -d '\r' | grep -m1 -E '^[A-Za-z]:\\'); then
+        printf 'scripts/win: cannot resolve %%%s%% via cmd.exe; raw output:\n%s\n' "$1" "$raw" >&2
+        return 1
+    fi
+    printf '%s\n' "$line"
+}
+
+local_appdata=$(win_env LOCALAPPDATA) || exit 1
+# The venv must live on a local Windows disk, not on the UNC share.
+export UV_PROJECT_ENVIRONMENT="${local_appdata}\\switch2-autoplay\\venv"
+export WSLENV="${WSLENV:+${WSLENV%:}:}UV_PROJECT_ENVIRONMENT"
+
+if [[ "${1:-}" == "--print-env" ]]; then
+    printf '%s\n' "$UV_PROJECT_ENVIRONMENT"
+    exit 0
+fi
+
+if ! uv=$(command -v uv.exe); then
+    user_profile=$(win_env USERPROFILE) || exit 1
+    uv=$(wslpath -u "${user_profile}\\.local\\bin\\uv.exe")
+    if [[ ! -x "$uv" ]]; then
+        echo "scripts/win: uv.exe not on PATH and not at $uv; see docs/DEVELOPMENT.md" >&2
+        exit 1
+    fi
+fi
+
+exec "$uv" run --project "$repo_unc" --directory "$repo_unc" "$@"

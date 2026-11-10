@@ -1,0 +1,33 @@
+import argparse
+import sys
+from importlib.metadata import version
+
+# Each entry is a module-level `register(sub) -> None` that adds one subparser
+# and sets `func=handler`, where `handler(args) -> int` is the exit code.
+_REGISTRARS = ()
+
+
+def _build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(prog="ap")
+    parser.add_argument(
+        "--version", action="version", version=f"%(prog)s {version('switch2-autoplay')}"
+    )
+    sub = parser.add_subparsers(dest="command", metavar="command")
+    for register in _REGISTRARS:
+        register(sub)
+    return parser
+
+
+def main(argv: list[str] | None = None) -> int:
+    """Run the `ap` CLI and return its exit code; never raises SystemExit."""
+    parser = _build_parser()
+    try:
+        args = parser.parse_args(argv)
+    except SystemExit as exc:
+        if exc.code is None:
+            return 0
+        return exc.code if isinstance(exc.code, int) else 1
+    if args.command is None:
+        parser.print_help(sys.stderr)
+        return 2
+    return args.func(args)
