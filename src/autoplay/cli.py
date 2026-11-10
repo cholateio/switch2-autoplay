@@ -2,9 +2,11 @@ import argparse
 import sys
 from importlib.metadata import version
 
+from autoplay.core.tools import capture_view, probe
+
 # Each entry is a module-level `register(sub) -> None` that adds one subparser
 # and sets `func=handler`, where `handler(args) -> int` is the exit code.
-_REGISTRARS = ()
+_REGISTRARS = (probe.register, capture_view.register)
 
 
 def _build_parser() -> argparse.ArgumentParser:
