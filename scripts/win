@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Run a command in the project's Windows-native venv: scripts/win <args...>
-# equals `uv.exe run --project <repo UNC> <args...>` with the repo root as cwd,
+# equals `uv.exe run --project <repo UNC> --directory <repo UNC> <args...>`,
 # so relative paths (tests/, runs/, fixtures/) resolve to this single WSL checkout.
+# A leading `pytest` or `ap` is rewritten to `python -m pytest` / `python -m autoplay`.
 # scripts/win --print-env prints the resolved UV_PROJECT_ENVIRONMENT and exits.
 set -euo pipefail
 

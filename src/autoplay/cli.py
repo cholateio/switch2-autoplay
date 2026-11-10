@@ -19,7 +19,7 @@ def _build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
-    """Run the `ap` CLI and return its exit code; never raises SystemExit."""
+    """Run the `ap` CLI and return its exit code; argparse exits become return codes."""
     parser = _build_parser()
     try:
         args = parser.parse_args(argv)

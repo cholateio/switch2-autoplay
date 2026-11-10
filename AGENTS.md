@@ -21,15 +21,16 @@ A machine that gives a model eyes (a capture card) and hands (an ESP32-S3 posing
 
 ## Constraints
 
-- The core must contain no game knowledge: no button semantics, templates or coordinates.
+- The core must contain no game knowledge: no button semantics, templates or coordinates. Button names use only the generic Switch names.
 - Automate single-player content only; never modify the console, never read or write game memory.
+- Third-party firmware binaries (the PokemonAutomation `.bin` used for the M0 check) are for personal, non-commercial use only and never enter the repo.
 - Game screenshots, recordings and other people's videos live only in the gitignored `fixtures/`; the repo is public and must never contain them. Committed tests use only programmatically generated synthetic frames.
 - Code comments are English only and state invariants, cross-file coupling or non-obvious reasons; no narrating comments; docstrings only for public API contracts.
 - Hardware work runs under Windows-native Python (invoked from WSL through `scripts/win`); pure-logic tests run in WSL.
 - Every gamepad state is held for at least 16 ms; a button press defaults to 80 ms and the release gap to 50 ms. These constants live only in `src/autoplay/config/timing.yaml`.
-- Firmware watchdog: 300 ms.
-- Coordinates and templates use 1920×1080 as the reference resolution.
-- Capture never goes through compression or the network.
+- Firmware watchdog: 300 ms without a CRC-valid packet clears the queue, releases every button and centres the sticks.
+- Coordinates and templates use 1920×1080 as the reference resolution and are scaled when the actual resolution differs.
+- Capture never goes through compression or the network; a device source keeps only the latest frame.
 - Every action is "do, then confirm"; no blind macros.
 - Path-type constraints are mirrored in `kit.toml [protected]`; keep the two in sync (one glob per line).
 
