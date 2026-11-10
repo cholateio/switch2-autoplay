@@ -1,4 +1,5 @@
 import math
+import subprocess
 import sys
 import threading
 import time
@@ -367,3 +368,53 @@ def test_loopback_invalid_when_source_reported_no_fps():
     assert summary.decode_rate == pytest.approx(1.0)
     assert not summary.valid
     assert "0.0 fps" in summary.reason
+
+
+_BLOCKED_CHILD = """
+import threading
+from autoplay.core.tools import probe
+
+def opener(index, api):
+    threading.Event().wait()
+
+raise SystemExit(
+    probe._run_only(0, "dshow:YUY2", opener=opener, seconds=0.05, deadline=0.5)
+)
+"""
+
+
+# Nothing here kills the child: it must end on its own deadline, which is what
+# frees the device when the parent died before its timeout fired.
+def test_only_exits_on_its_own_deadline_when_the_driver_blocks():
+    done = subprocess.run(
+        [sys.executable, "-c", _BLOCKED_CHILD],
+        stdout=subprocess.PIPE,
+        text=True,
+        timeout=120,
+        check=False,
+    )
+    assert done.returncode == probe.DEADLINE_EXIT_CODE
+    assert done.stdout == ""
+
+
+class _FakeTimer:
+    def __init__(self):
+        self.cancelled = False
+
+    def cancel(self):
+        self.cancelled = True
+
+
+def test_only_disarms_its_deadline_after_the_row(monkeypatch, capsys):
+    armed = []
+
+    def arm(seconds):
+        armed.append((seconds, _FakeTimer()))
+        return armed[-1][1]
+
+    monkeypatch.setattr(probe, "_arm_deadline", arm)
+    assert probe._run_only(0, "dshow:YUY2", opener=_table_opener, seconds=0.05) == 0
+    assert [seconds for seconds, _ in armed] == [probe.ROW_TIMEOUT_S]
+    assert armed[0][1].cancelled
+    assert probe._run_only(0, "nope:YUY2") == 2
+    assert len(armed) == 1

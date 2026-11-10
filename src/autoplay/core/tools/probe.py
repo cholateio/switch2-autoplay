@@ -1,5 +1,6 @@
 import argparse
 import math
+import os
 import subprocess
 import sys
 import threading
@@ -27,6 +28,7 @@ PROBE_SECONDS = 5.0
 # Per-row limit for the child process: interpreter start, a slow MSMF open and
 # PROBE_SECONDS of reads all fit well inside it.
 ROW_TIMEOUT_S = 40.0
+DEADLINE_EXIT_CODE = 3
 LOOPBACK_SECONDS = 10.0
 # The first frames after the window opens still show the previous screen.
 LOOPBACK_WARMUP_SECONDS = 1.0
@@ -299,12 +301,23 @@ def _run_table(
     return 0
 
 
+# The parent's timeout only works while the parent lives, and Windows does not
+# end a child with its parent. os._exit from a timer thread ends this process
+# even while the main thread is stuck inside a driver call.
+def _arm_deadline(seconds: float) -> threading.Timer:
+    timer = threading.Timer(seconds, os._exit, args=(DEADLINE_EXIT_CODE,))
+    timer.daemon = True
+    timer.start()
+    return timer
+
+
 def _run_only(
     index: int,
     combination: str,
     *,
     opener: Callable[..., "cv2.VideoCapture"] | None = None,
     seconds: float = PROBE_SECONDS,
+    deadline: float = ROW_TIMEOUT_S,
 ) -> int:
     backend, _, fourcc = combination.partition(":")
     if backend not in PROBE_BACKENDS or fourcc not in PROBE_FOURCCS:
@@ -314,7 +327,11 @@ def _run_only(
             file=sys.stderr,
         )
         return 2
-    row = _probe_one(index, backend, fourcc, opener, seconds)
+    timer = _arm_deadline(deadline)
+    try:
+        row = _probe_one(index, backend, fourcc, opener, seconds)
+    finally:
+        timer.cancel()
     print(row.text, flush=True)
     return 0 if row.measured else 1
 
@@ -434,6 +451,10 @@ def register(sub) -> None:
     p.add_argument(
         "--only",
         metavar="BACKEND:FOURCC",
-        help="measure one combination in this process, e.g. dshow:YUY2",
+        help=(
+            "measure one combination in this process, e.g. dshow:YUY2; the process "
+            f"exits with code {DEADLINE_EXIT_CODE} if that takes over "
+            f"{ROW_TIMEOUT_S:.0f} s"
+        ),
     )
     p.set_defaults(func=_handle)
