@@ -44,21 +44,31 @@ def open_capture(
     opener: Callable[..., "cv2.VideoCapture"] | None = None,
 ) -> "cv2.VideoCapture":
     """Open and configure a capture device; raise `CaptureError` naming the
-    index and backend if it cannot be opened."""
+    index and backend if it cannot be opened or configured. The device is
+    released before any exception leaves this function."""
     _check_backend(backend)
     cap = (opener or cv2.VideoCapture)(index, BACKENDS[backend])
-    if not cap.isOpened():
+    try:
+        if not cap.isOpened():
+            raise CaptureError(
+                f"cannot open capture device index {index} with backend {backend}"
+            )
+        try:
+            # DirectShow ignores FOURCC set after the frame size, so FOURCC goes first.
+            cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter.fourcc(*fourcc))
+            cap.set(cv2.CAP_PROP_FRAME_WIDTH, width)
+            cap.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
+            cap.set(cv2.CAP_PROP_FPS, fps)
+            cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+            cap.set(cv2.CAP_PROP_CONVERT_RGB, 1)
+        except Exception as exc:
+            raise CaptureError(
+                f"cannot configure capture device index {index} with backend "
+                f"{backend}: {exc}"
+            ) from exc
+    except BaseException:
         cap.release()
-        raise CaptureError(
-            f"cannot open capture device index {index} with backend {backend}"
-        )
-    # DirectShow ignores FOURCC set after the frame size, so FOURCC goes first.
-    cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter.fourcc(*fourcc))
-    cap.set(cv2.CAP_PROP_FRAME_WIDTH, width)
-    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
-    cap.set(cv2.CAP_PROP_FPS, fps)
-    cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
-    cap.set(cv2.CAP_PROP_CONVERT_RGB, 1)
+        raise
     return cap
 
 

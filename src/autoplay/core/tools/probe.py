@@ -1,5 +1,6 @@
 import argparse
 import math
+import subprocess
 import sys
 import threading
 import time
@@ -23,12 +24,19 @@ from autoplay.core.tools.pattern import (
 PROBE_BACKENDS = ("dshow", "msmf")
 PROBE_FOURCCS = ("YUY2", "NV12", "MJPG")
 PROBE_SECONDS = 5.0
+# Per-row limit for the child process: interpreter start, a slow MSMF open and
+# PROBE_SECONDS of reads all fit well inside it.
+ROW_TIMEOUT_S = 40.0
 LOOPBACK_SECONDS = 10.0
 # The first frames after the window opens still show the previous screen.
 LOOPBACK_WARMUP_SECONDS = 1.0
 MIN_DECODE_RATE = 0.9
 # A run must receive at least this fraction of LOOPBACK_SECONDS x the source fps.
 MIN_RECEIVED_FRACTION = 0.5
+# Half the 60 fps the loopback requests. The frame minimum scales with the
+# observed fps, so without this floor a stream crawling at 1 fps would pass on
+# a handful of frames.
+MIN_SOURCE_FPS = 30.0
 # A stamp corrupted in two cells still passes parity and yields an age near
 # 2**24 ms; any age above this bound counts as a decode failure.
 MAX_AGE_MS = 2000
@@ -41,6 +49,12 @@ class ReadTiming:
     p50_ms: float
     p99_ms: float
     read_ms: float
+
+
+@dataclass(frozen=True)
+class ProbeRow:
+    text: str
+    measured: bool
 
 
 @dataclass(frozen=True)
@@ -91,7 +105,7 @@ def summarize_loopback(
     seconds: float = LOOPBACK_SECONDS,
 ) -> LoopbackSummary:
     """Judge a loopback run. Ages above MAX_AGE_MS count as decode failures. The run
-    is valid only if source_fps is positive, it received at least
+    is valid only if source_fps is at least MIN_SOURCE_FPS, it received at least
     MIN_RECEIVED_FRACTION x seconds x source_fps frames and it decoded at least
     MIN_DECODE_RATE of them."""
     plausible = [age for age in ages_ms if age <= MAX_AGE_MS]
@@ -102,8 +116,11 @@ def summarize_loopback(
     else:
         p50 = p99 = math.nan
     reason = None
-    if source_fps <= 0:
-        reason = "source reported 0 fps when the measurement started"
+    if source_fps < MIN_SOURCE_FPS:
+        reason = (
+            f"source delivered {source_fps:.1f} fps when the measurement started, "
+            f"below the {MIN_SOURCE_FPS:.0f} fps floor"
+        )
     elif received < min_frames:
         reason = (
             f"received {received} frames, need at least {min_frames} "
@@ -189,36 +206,117 @@ def _time_reads(index, backend, fourcc, opener, seconds):
     return ends, durations, shape, actual
 
 
-def _probe_one(index: int, backend: str, fourcc: str, opener, seconds: float) -> str:
-    label = f"{backend:<7} {fourcc:<6}"
+def _row_label(backend: str, fourcc: str) -> str:
+    return f"{backend:<7} {fourcc:<6}"
+
+
+def _probe_one(
+    index: int, backend: str, fourcc: str, opener, seconds: float
+) -> ProbeRow:
+    label = _row_label(backend, fourcc)
     try:
         ends, durations, shape, actual = _time_reads(
             index, backend, fourcc, opener, seconds
         )
     # One failing combination (cv2.error included) must not stop the table.
     except Exception as exc:  # noqa: BLE001
-        return f"{label} unavailable ({_brief(exc)})"
-    if shape is None:
-        return f"{label} unavailable (no frames)"
+        return ProbeRow(f"{label} unavailable ({_brief(exc)})", False)
+    if shape is None or len(ends) < 2:
+        return ProbeRow(
+            f"{label} unavailable ({len(ends)} frames in {seconds:g} s)", False
+        )
     t = summarize_reads(ends, durations)
     size = f"{shape[1]}x{shape[0]}"
-    return (
+    return ProbeRow(
         f"{label} {size:<10} {actual:<6} {t.fps:>6.2f} {t.p50_ms:>7.2f} "
-        f"{t.p99_ms:>7.2f} {t.read_ms:>8.2f}"
+        f"{t.p99_ms:>7.2f} {t.read_ms:>8.2f}",
+        True,
     )
 
 
-def _run_table(
+def _row_command(index: int, backend: str, fourcc: str) -> list[str]:
+    return [
+        sys.executable,
+        "-m",
+        "autoplay",
+        "probe",
+        "--index",
+        str(index),
+        "--only",
+        f"{backend}:{fourcc}",
+    ]
+
+
+# A driver call that never returns cannot be interrupted from Python; killing a
+# child process is the only way to bound a row and have the OS release the device.
+# Coupled to `--only`: the child prints its row as the last stdout line and exits
+# 0 only if it measured.
+def _spawn_row(
     index: int,
+    backend: str,
+    fourcc: str,
+    *,
+    timeout: float = ROW_TIMEOUT_S,
+    command: Sequence[str] | None = None,
+) -> ProbeRow:
+    label = _row_label(backend, fourcc)
+    try:
+        done = subprocess.run(
+            command or _row_command(index, backend, fourcc),
+            stdout=subprocess.PIPE,
+            text=True,
+            errors="replace",
+            timeout=timeout,
+            check=False,
+        )
+    except subprocess.TimeoutExpired:
+        return ProbeRow(
+            f"{label} unavailable (timed out after {timeout:g} s; probe process killed)",
+            False,
+        )
+    lines = done.stdout.strip().splitlines()
+    if not lines:
+        return ProbeRow(
+            f"{label} unavailable (probe process exited with code {done.returncode})",
+            False,
+        )
+    return ProbeRow(lines[-1], done.returncode == 0)
+
+
+def _run_table(
+    index: int, *, run_row: Callable[[int, str, str], ProbeRow] = _spawn_row
+) -> int:
+    print("backend fourcc size       actual    fps  p50 ms  p99 ms  read ms")
+    measured = False
+    for backend in PROBE_BACKENDS:
+        for fourcc in PROBE_FOURCCS:
+            row = run_row(index, backend, fourcc)
+            print(row.text, flush=True)
+            measured = measured or row.measured
+    if not measured:
+        print("error: no backend/format combination delivered frames", file=sys.stderr)
+        return 1
+    return 0
+
+
+def _run_only(
+    index: int,
+    combination: str,
     *,
     opener: Callable[..., "cv2.VideoCapture"] | None = None,
     seconds: float = PROBE_SECONDS,
 ) -> int:
-    print("backend fourcc size       actual    fps  p50 ms  p99 ms  read ms")
-    for backend in PROBE_BACKENDS:
-        for fourcc in PROBE_FOURCCS:
-            print(_probe_one(index, backend, fourcc, opener, seconds), flush=True)
-    return 0
+    backend, _, fourcc = combination.partition(":")
+    if backend not in PROBE_BACKENDS or fourcc not in PROBE_FOURCCS:
+        print(
+            f"error: --only expects BACKEND:FOURCC with a backend from "
+            f"{', '.join(PROBE_BACKENDS)} and a format from {', '.join(PROBE_FOURCCS)}",
+            file=sys.stderr,
+        )
+        return 2
+    row = _probe_one(index, backend, fourcc, opener, seconds)
+    print(row.text, flush=True)
+    return 0 if row.measured else 1
 
 
 def _measure_loopback(src: DeviceSource, monitor: Monitor) -> LoopbackRun:
@@ -301,10 +399,15 @@ def _run_loopback(index: int, monitor_index: int | None) -> int:
 
 def _handle(args: argparse.Namespace) -> int:
     if args.loopback:
+        if args.only is not None:
+            print("error: --only does not apply with --loopback", file=sys.stderr)
+            return 2
         return _run_loopback(args.index, args.monitor)
     if args.monitor is not None:
         print("error: --monitor only applies with --loopback", file=sys.stderr)
         return 2
+    if args.only is not None:
+        return _run_only(args.index, args.only)
     return _run_table(args.index)
 
 
@@ -314,7 +417,9 @@ def register(sub) -> None:
         help="measure what a capture device delivers",
         description=(
             "Without --loopback: open every backend x pixel format for "
-            f"{PROBE_SECONDS:.0f} s and print size, format, fps and frame timing. "
+            f"{PROBE_SECONDS:.0f} s and print size, format, fps and frame timing; "
+            f"each combination runs in its own process, killed after "
+            f"{ROW_TIMEOUT_S:.0f} s. "
             "With --loopback: show a time-stamp pattern full screen on --monitor N "
             "and measure how old captured frames are."
         ),
@@ -325,5 +430,10 @@ def register(sub) -> None:
     p.add_argument("--loopback", action="store_true", help="measure captured-frame age")
     p.add_argument(
         "--monitor", type=int, help="monitor wired to the capture card (loopback)"
+    )
+    p.add_argument(
+        "--only",
+        metavar="BACKEND:FOURCC",
+        help="measure one combination in this process, e.g. dshow:YUY2",
     )
     p.set_defaults(func=_handle)

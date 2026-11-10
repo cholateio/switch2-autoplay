@@ -194,10 +194,12 @@ class BlockingCapture(FakeCapture):
     def __init__(self):
         super().__init__()
         self.gate = threading.Event()
+        self.blocked = threading.Event()
 
     def read(self):
         if self.produced == 0:
             return super().read()
+        self.blocked.set()
         self.gate.wait()
         return False, None
 
@@ -207,6 +209,7 @@ def test_close_does_not_release_during_in_flight_read(monkeypatch, caplog):
     fake = BlockingCapture()
     src, _ = make_source(fake)
     src.start()
+    assert fake.blocked.wait(timeout=2)
     with caplog.at_level(logging.WARNING, logger=device.__name__):
         src.close()
     assert not fake.released
@@ -238,5 +241,22 @@ def test_start_releases_device_when_setup_fails_before_reader_thread():
     src, _ = make_source(fake)
     with pytest.raises(RuntimeError, match="driver query failed"):
         src.start()
+    assert fake.released
+    src.close()
+
+
+class SetFailsCapture(FakeCapture):
+    def set(self, prop, value):
+        raise RuntimeError("driver rejected the property")
+
+
+def test_start_releases_device_when_configuration_fails():
+    fake = SetFailsCapture()
+    src, _ = make_source(fake)
+    with pytest.raises(CaptureError) as exc:
+        src.start()
+    assert "index 0" in str(exc.value)
+    assert "dshow" in str(exc.value)
+    assert "driver rejected the property" in str(exc.value)
     assert fake.released
     src.close()
