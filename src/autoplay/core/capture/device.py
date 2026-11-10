@@ -1,3 +1,4 @@
+import logging
 import threading
 import time
 from collections import deque
@@ -5,6 +6,7 @@ from collections.abc import Callable
 
 import cv2
 
+from autoplay.core import clock
 from autoplay.core.capture.base import CaptureError, CaptureStats, Frame, FrameSource
 
 BACKENDS = {"dshow": cv2.CAP_DSHOW, "msmf": cv2.CAP_MSMF}
@@ -13,6 +15,9 @@ _FIRST_FRAME_TIMEOUT_S = 2.0
 _STALE_AFTER_S = 0.5
 _FPS_WINDOW_S = 1.0
 _READ_FAIL_BACKOFF_S = 0.005
+_JOIN_TIMEOUT_S = 2.0
+
+_log = logging.getLogger(__name__)
 
 
 def fourcc_str(value: float) -> str:
@@ -59,7 +64,10 @@ def open_capture(
 
 class DeviceSource(FrameSource):
     """A capture device read by a background thread that keeps only the newest
-    frame. `opener(index, api_preference)` replaces `cv2.VideoCapture` in tests."""
+    frame. `opener(index, api_preference)` replaces `cv2.VideoCapture` in tests.
+
+    A source is single-use: a second `start()`, including one after `close()`,
+    raises RuntimeError; create a new source instead."""
 
     def __init__(
         self,
@@ -77,6 +85,8 @@ class DeviceSource(FrameSource):
         self._backend = backend
         self._config = {"width": width, "height": height, "fps": fps, "fourcc": fourcc}
         self._opener = opener
+        self._started = False
+        self._closed = False
         self._cap = None
         self._fourcc = ""
         self._thread: threading.Thread | None = None
@@ -87,13 +97,20 @@ class DeviceSource(FrameSource):
         self._recent: deque[float] = deque()
 
     def start(self) -> None:
+        if self._started:
+            raise RuntimeError(
+                "DeviceSource is single-use; create a new one to restart"
+            )
+        self._started = True
         self._cap = open_capture(
             self._index, backend=self._backend, opener=self._opener, **self._config
         )
         self._fourcc = fourcc_str(self._cap.get(cv2.CAP_PROP_FOURCC))
-        self._stop.clear()
         self._thread = threading.Thread(
-            target=self._run, name=f"capture-device-{self._index}", daemon=True
+            target=self._run,
+            args=(self._cap,),
+            name=f"capture-device-{self._index}",
+            daemon=True,
         )
         self._thread.start()
         with self._cond:
@@ -107,21 +124,25 @@ class DeviceSource(FrameSource):
                 f"{self._backend} within {_FIRST_FRAME_TIMEOUT_S} s"
             )
 
-    def _run(self) -> None:
-        cap = self._cap
-        while not self._stop.is_set():
-            ok, img = cap.read()
-            if not ok or img is None:
-                time.sleep(_READ_FAIL_BACKOFF_S)
-                continue
-            # read() returns once the frame is delivered, so ts is an upper bound on grab time.
-            ts = time.monotonic()
-            with self._cond:
-                self._frames += 1
-                self._latest = Frame(bgr=img, ts=ts, seq=self._frames)
-                self._recent.append(ts)
-                self._prune(ts)
-                self._cond.notify_all()
+    # The reader thread owns release(): releasing from another thread while
+    # read() is in flight can crash the process inside the driver.
+    def _run(self, cap) -> None:
+        try:
+            while not self._stop.is_set():
+                ok, img = cap.read()
+                if not ok or img is None:
+                    time.sleep(_READ_FAIL_BACKOFF_S)
+                    continue
+                # read() returns once the frame is delivered, so ts is an upper bound on grab time.
+                ts = clock.now()
+                with self._cond:
+                    self._frames += 1
+                    self._latest = Frame(bgr=img, ts=ts, seq=self._frames)
+                    self._recent.append(ts)
+                    self._prune(ts)
+                    self._cond.notify_all()
+        finally:
+            cap.release()
 
     def _prune(self, now: float) -> None:
         while self._recent and now - self._recent[0] > _FPS_WINDOW_S:
@@ -144,7 +165,7 @@ class DeviceSource(FrameSource):
             return None
 
     def stats(self) -> CaptureStats:
-        now = time.monotonic()
+        now = clock.now()
         with self._cond:
             self._prune(now)
             frame = self._latest
@@ -159,12 +180,23 @@ class DeviceSource(FrameSource):
             )
 
     def close(self) -> None:
+        if self._closed:
+            return
+        self._closed = True
         self._stop.set()
         with self._cond:
             self._cond.notify_all()
-        if self._thread is not None:
-            self._thread.join(timeout=2.0)
-            self._thread = None
-        if self._cap is not None:
-            self._cap.release()
-            self._cap = None
+        if self._thread is None:
+            return
+        self._thread.join(timeout=_JOIN_TIMEOUT_S)
+        if self._thread.is_alive():
+            _log.warning(
+                "capture device index %d (%s): read() still blocked after %.1f s; "
+                "the device is released when it returns",
+                self._index,
+                self._backend,
+                _JOIN_TIMEOUT_S,
+            )
+            return
+        self._thread = None
+        self._cap = None

@@ -13,8 +13,8 @@ class CaptureError(RuntimeError):
 class Frame:
     """One captured image.
 
-    `bgr` is HxWx3 uint8. `ts` is in seconds: `time.monotonic()` at grab for a
-    device, media time for a file. `seq` is strictly increasing per source.
+    `bgr` is HxWx3 uint8. `ts` is in seconds: `autoplay.core.clock.now()` at grab
+    for a device, media time for a file. `seq` is strictly increasing per source.
     """
 
     bgr: np.ndarray

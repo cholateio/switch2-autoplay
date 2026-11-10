@@ -3,15 +3,22 @@ import math
 import sys
 import threading
 import time
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 
 import cv2
 import numpy as np
 
-from autoplay.core.capture.base import CaptureError
+from autoplay.core import clock
+from autoplay.core.capture.base import CaptureError, FrameSource
 from autoplay.core.capture.device import DeviceSource, fourcc_str, open_capture
-from autoplay.core.tools.pattern import decode_stamp, encode_stamp, stamp_age_ms
+from autoplay.core.tools.monitors import Monitor, format_monitors, list_monitors
+from autoplay.core.tools.pattern import (
+    decode_stamp,
+    encode_stamp,
+    paint_stamp,
+    stamp_age_ms,
+)
 
 PROBE_BACKENDS = ("dshow", "msmf")
 PROBE_FOURCCS = ("YUY2", "NV12", "MJPG")
@@ -20,6 +27,11 @@ LOOPBACK_SECONDS = 10.0
 # The first frames after the window opens still show the previous screen.
 LOOPBACK_WARMUP_SECONDS = 1.0
 MIN_DECODE_RATE = 0.9
+# A run must receive at least this fraction of LOOPBACK_SECONDS x the source fps.
+MIN_RECEIVED_FRACTION = 0.5
+# A stamp corrupted in two cells still passes parity and yields an age near
+# 2**24 ms; any age above this bound counts as a decode failure.
+MAX_AGE_MS = 2000
 _READ_FAIL_BACKOFF_S = 0.005
 
 
@@ -32,23 +44,23 @@ class ReadTiming:
 
 
 @dataclass(frozen=True)
-class LoopbackSummary:
-    p50_ms: float
-    p99_ms: float
-    decode_rate: float
-    valid: bool
+class LoopbackRun:
+    ages_ms: list[int]
+    received: int
+    source_fps: float
+    error: str | None
 
 
 @dataclass(frozen=True)
-class Monitor:
-    index: int
-    name: str
-    x: int
-    y: int
-    width: int
-    height: int
-    refresh_hz: int
-    primary: bool
+class LoopbackSummary:
+    p50_ms: float
+    p99_ms: float
+    decoded: int
+    received: int
+    min_frames: int
+    decode_rate: float
+    valid: bool
+    reason: str | None
 
 
 def interval_percentiles_ms(times_s: Sequence[float]) -> tuple[float, float]:
@@ -61,165 +73,107 @@ def interval_percentiles_ms(times_s: Sequence[float]) -> tuple[float, float]:
 
 
 def summarize_reads(
-    read_ends: Sequence[float], read_durations: Sequence[float], elapsed: float
+    read_ends: Sequence[float], read_durations: Sequence[float]
 ) -> ReadTiming:
-    """Summarize successful `read()` calls: completion times and durations in seconds."""
+    """Summarize successful `read()` calls from their completion times and durations
+    in seconds; fps spans the first to the last completion only."""
     p50, p99 = interval_percentiles_ms(read_ends)
+    span = read_ends[-1] - read_ends[0] if len(read_ends) >= 2 else 0.0
+    fps = (len(read_ends) - 1) / span if span > 0 else math.nan
     read_ms = float(np.mean(read_durations)) * 1000 if len(read_durations) else math.nan
-    return ReadTiming(len(read_ends) / elapsed, p50, p99, read_ms)
+    return ReadTiming(fps, p50, p99, read_ms)
 
 
-def summarize_loopback(ages_ms: Sequence[int], attempts: int) -> LoopbackSummary:
-    """Summarize decoded frame ages; the run is valid only at a decode rate >= 90%."""
-    rate = len(ages_ms) / attempts if attempts else 0.0
-    if ages_ms:
-        p50, p99 = (float(v) for v in np.percentile(ages_ms, [50, 99]))
+def summarize_loopback(
+    ages_ms: Sequence[int],
+    received: int,
+    source_fps: float,
+    seconds: float = LOOPBACK_SECONDS,
+) -> LoopbackSummary:
+    """Judge a loopback run. Ages above MAX_AGE_MS count as decode failures. The run
+    is valid only if it received at least MIN_RECEIVED_FRACTION x seconds x
+    source_fps frames and decoded at least MIN_DECODE_RATE of them."""
+    plausible = [age for age in ages_ms if age <= MAX_AGE_MS]
+    rate = len(plausible) / received if received else 0.0
+    min_frames = math.ceil(MIN_RECEIVED_FRACTION * seconds * source_fps)
+    if plausible:
+        p50, p99 = (float(v) for v in np.percentile(plausible, [50, 99]))
     else:
         p50 = p99 = math.nan
-    return LoopbackSummary(p50, p99, rate, rate >= MIN_DECODE_RATE)
-
-
-def format_monitors(monitors: Sequence[Monitor]) -> str:
-    lines = ["monitor  device          position     resolution  refresh"]
-    for m in monitors:
-        lines.append(
-            f"{m.index:<8} {m.name:<15} {f'{m.x},{m.y}':<12} {f'{m.width}x{m.height}':<11} "
-            f"{m.refresh_hz} Hz{'  (primary)' if m.primary else ''}"
+    reason = None
+    if received < min_frames:
+        reason = (
+            f"received {received} frames, need at least {min_frames} "
+            f"({MIN_RECEIVED_FRACTION:.0%} of {seconds:g} s x {source_fps:.1f} fps)"
         )
-    return "\n".join(lines)
-
-
-def _list_monitors() -> list[Monitor]:
-    if sys.platform != "win32":
-        raise RuntimeError("monitor listing needs Windows; run through scripts/win")
-    import ctypes
-    from ctypes import wintypes
-
-    user32 = ctypes.windll.user32
-    # Without per-monitor DPI awareness Windows reports scaled rectangles, and the
-    # full-screen pattern would be drawn at the wrong size.
-    user32.SetProcessDpiAwarenessContext.argtypes = [ctypes.c_void_p]
-    user32.SetProcessDpiAwarenessContext(ctypes.c_void_p(-4))
-
-    class MONITORINFOEXW(ctypes.Structure):
-        _fields_ = [
-            ("cbSize", wintypes.DWORD),
-            ("rcMonitor", wintypes.RECT),
-            ("rcWork", wintypes.RECT),
-            ("dwFlags", wintypes.DWORD),
-            ("szDevice", wintypes.WCHAR * 32),
-        ]
-
-    # Display variant of DEVMODEW; sizeof must be 220.
-    class DEVMODEW(ctypes.Structure):
-        _fields_ = [
-            ("dmDeviceName", wintypes.WCHAR * 32),
-            ("dmSpecVersion", wintypes.WORD),
-            ("dmDriverVersion", wintypes.WORD),
-            ("dmSize", wintypes.WORD),
-            ("dmDriverExtra", wintypes.WORD),
-            ("dmFields", wintypes.DWORD),
-            ("dmPositionX", wintypes.LONG),
-            ("dmPositionY", wintypes.LONG),
-            ("dmDisplayOrientation", wintypes.DWORD),
-            ("dmDisplayFixedOutput", wintypes.DWORD),
-            ("dmColor", wintypes.SHORT),
-            ("dmDuplex", wintypes.SHORT),
-            ("dmYResolution", wintypes.SHORT),
-            ("dmTTOption", wintypes.SHORT),
-            ("dmCollate", wintypes.SHORT),
-            ("dmFormName", wintypes.WCHAR * 32),
-            ("dmLogPixels", wintypes.WORD),
-            ("dmBitsPerPel", wintypes.DWORD),
-            ("dmPelsWidth", wintypes.DWORD),
-            ("dmPelsHeight", wintypes.DWORD),
-            ("dmDisplayFlags", wintypes.DWORD),
-            ("dmDisplayFrequency", wintypes.DWORD),
-            ("dmICMMethod", wintypes.DWORD),
-            ("dmICMIntent", wintypes.DWORD),
-            ("dmMediaType", wintypes.DWORD),
-            ("dmDitherType", wintypes.DWORD),
-            ("dmReserved1", wintypes.DWORD),
-            ("dmReserved2", wintypes.DWORD),
-            ("dmPanningWidth", wintypes.DWORD),
-            ("dmPanningHeight", wintypes.DWORD),
-        ]
-
-    enum_proc = ctypes.WINFUNCTYPE(
-        wintypes.BOOL,
-        wintypes.HMONITOR,
-        wintypes.HDC,
-        ctypes.POINTER(wintypes.RECT),
-        wintypes.LPARAM,
+    elif rate < MIN_DECODE_RATE:
+        reason = f"decode rate {rate:.1%} below {MIN_DECODE_RATE:.0%}"
+    return LoopbackSummary(
+        p50, p99, len(plausible), received, min_frames, rate, reason is None, reason
     )
-    user32.EnumDisplayMonitors.argtypes = [
-        wintypes.HDC,
-        ctypes.c_void_p,
-        enum_proc,
-        wintypes.LPARAM,
-    ]
-    user32.GetMonitorInfoW.argtypes = [
-        wintypes.HMONITOR,
-        ctypes.POINTER(MONITORINFOEXW),
-    ]
-    user32.EnumDisplaySettingsW.argtypes = [
-        wintypes.LPCWSTR,
-        wintypes.DWORD,
-        ctypes.POINTER(DEVMODEW),
-    ]
-    enum_current_settings = 0xFFFFFFFF
-    monitor_info_primary = 1
-    monitors: list[Monitor] = []
-
-    def callback(hmonitor, _hdc, _rect, _data):
-        info = MONITORINFOEXW()
-        info.cbSize = ctypes.sizeof(MONITORINFOEXW)
-        if not user32.GetMonitorInfoW(hmonitor, ctypes.byref(info)):
-            return True
-        mode = DEVMODEW()
-        mode.dmSize = ctypes.sizeof(DEVMODEW)
-        ok = user32.EnumDisplaySettingsW(
-            info.szDevice, enum_current_settings, ctypes.byref(mode)
-        )
-        r = info.rcMonitor
-        monitors.append(
-            Monitor(
-                index=len(monitors),
-                name=info.szDevice,
-                x=r.left,
-                y=r.top,
-                width=r.right - r.left,
-                height=r.bottom - r.top,
-                refresh_hz=int(mode.dmDisplayFrequency) if ok else 0,
-                primary=bool(info.dwFlags & monitor_info_primary),
-            )
-        )
-        return True
-
-    if not user32.EnumDisplayMonitors(None, None, enum_proc(callback), 0):
-        raise RuntimeError("EnumDisplayMonitors failed")
-    return monitors
 
 
-def _probe_one(index: int, backend: str, fourcc: str) -> str:
-    label = f"{backend:<7} {fourcc:<6}"
-    try:
-        cap = open_capture(
-            index, backend=backend, width=1920, height=1080, fps=60, fourcc=fourcc
-        )
-    except CaptureError:
-        return f"{label} unavailable"
+class AgeCollector:
+    """Decodes each new frame of `src` whose `ts` lies in [measure_from,
+    measure_until] and records its age in ms. `run(done)` returns when `done` is
+    set or on the first exception, whose text it stores in `error`."""
+
+    def __init__(
+        self, src: FrameSource, measure_from: float, measure_until: float
+    ) -> None:
+        self._src = src
+        self._from = measure_from
+        self._until = measure_until
+        self.ages_ms: list[int] = []
+        self.received = 0
+        self.error: str | None = None
+
+    def run(self, done: threading.Event) -> None:
+        try:
+            seq = 0
+            while not done.is_set():
+                frame = self._src.wait_next(seq, 0.1)
+                if frame is None:
+                    continue
+                seq = frame.seq
+                if not self._from <= frame.ts <= self._until:
+                    continue
+                self.received += 1
+                stamp = decode_stamp(frame.bgr)
+                if stamp is not None:
+                    # Same clock as the drawn stamp: both come from clock.now().
+                    self.ages_ms.append(stamp_age_ms(int(frame.ts * 1000), stamp))
+        # Any failure must end the run visibly instead of leaving a silently short sample.
+        except Exception as exc:  # noqa: BLE001
+            self.error = f"{type(exc).__name__}: {exc}"
+
+
+def _brief(exc: Exception) -> str:
+    text = str(exc).strip().splitlines()
+    first = text[0] if text else type(exc).__name__
+    return first if len(first) <= 80 else first[:77] + "..."
+
+
+def _time_reads(index, backend, fourcc, opener, seconds):
+    cap = open_capture(
+        index,
+        backend=backend,
+        width=1920,
+        height=1080,
+        fps=60,
+        fourcc=fourcc,
+        opener=opener,
+    )
     try:
         cap.read()
         ends: list[float] = []
         durations: list[float] = []
         shape = None
-        start = time.perf_counter()
-        deadline = start + PROBE_SECONDS
-        while time.perf_counter() < deadline:
-            t0 = time.perf_counter()
+        deadline = clock.now() + seconds
+        while clock.now() < deadline:
+            t0 = clock.now()
             ok, img = cap.read()
-            t1 = time.perf_counter()
+            t1 = clock.now()
             if not ok or img is None:
                 time.sleep(_READ_FAIL_BACKOFF_S)
                 continue
@@ -229,9 +183,21 @@ def _probe_one(index: int, backend: str, fourcc: str) -> str:
         actual = fourcc_str(cap.get(cv2.CAP_PROP_FOURCC))
     finally:
         cap.release()
+    return ends, durations, shape, actual
+
+
+def _probe_one(index: int, backend: str, fourcc: str, opener, seconds: float) -> str:
+    label = f"{backend:<7} {fourcc:<6}"
+    try:
+        ends, durations, shape, actual = _time_reads(
+            index, backend, fourcc, opener, seconds
+        )
+    # One failing combination (cv2.error included) must not stop the table.
+    except Exception as exc:  # noqa: BLE001
+        return f"{label} unavailable ({_brief(exc)})"
     if shape is None:
-        return f"{label} unavailable"
-    t = summarize_reads(ends, durations, time.perf_counter() - start)
+        return f"{label} unavailable (no frames)"
+    t = summarize_reads(ends, durations)
     size = f"{shape[1]}x{shape[0]}"
     return (
         f"{label} {size:<10} {actual:<6} {t.fps:>6.2f} {t.p50_ms:>7.2f} "
@@ -239,57 +205,54 @@ def _probe_one(index: int, backend: str, fourcc: str) -> str:
     )
 
 
-def _run_table(index: int) -> int:
+def _run_table(
+    index: int,
+    *,
+    opener: Callable[..., "cv2.VideoCapture"] | None = None,
+    seconds: float = PROBE_SECONDS,
+) -> int:
     print("backend fourcc size       actual    fps  p50 ms  p99 ms  read ms")
     for backend in PROBE_BACKENDS:
         for fourcc in PROBE_FOURCCS:
-            print(_probe_one(index, backend, fourcc), flush=True)
+            print(_probe_one(index, backend, fourcc, opener, seconds), flush=True)
     return 0
 
 
-def _measure_loopback(src: DeviceSource, monitor: Monitor) -> tuple[list[int], int]:
+def _measure_loopback(src: DeviceSource, monitor: Monitor) -> LoopbackRun:
     window = "ap probe loopback"
-    ages: list[int] = []
-    attempts = 0
-    measure_from = time.monotonic() + LOOPBACK_WARMUP_SECONDS
+    measure_from = clock.now() + LOOPBACK_WARMUP_SECONDS
+    measure_until = measure_from + LOOPBACK_SECONDS
+    collector = AgeCollector(src, measure_from, measure_until)
     done = threading.Event()
-
-    def consume() -> None:
-        nonlocal attempts
-        seq = 0
-        while not done.is_set():
-            frame = src.wait_next(seq, 0.1)
-            if frame is None:
-                continue
-            seq = frame.seq
-            if frame.ts < measure_from:
-                continue
-            attempts += 1
-            stamp = decode_stamp(frame.bgr)
-            if stamp is not None:
-                # Same clock as the drawn stamp: both come from time.monotonic() in this process.
-                ages.append(stamp_age_ms(int(frame.ts * 1000), stamp))
-
+    source_fps: float | None = None
+    img = encode_stamp(0, (monitor.width, monitor.height))
     cv2.namedWindow(window, cv2.WINDOW_NORMAL)
     cv2.moveWindow(window, monitor.x, monitor.y)
     cv2.setWindowProperty(window, cv2.WND_PROP_FULLSCREEN, cv2.WINDOW_FULLSCREEN)
-    consumer = threading.Thread(target=consume, name="loopback-decode", daemon=True)
+    consumer = threading.Thread(
+        target=collector.run, args=(done,), name="loopback-decode"
+    )
     consumer.start()
     try:
-        while time.monotonic() < measure_from + LOOPBACK_SECONDS:
-            stamp_ms = int(time.monotonic() * 1000)
-            cv2.imshow(window, encode_stamp(stamp_ms, (monitor.width, monitor.height)))
+        while (now := clock.now()) < measure_until and consumer.is_alive():
+            if source_fps is None and now >= measure_from:
+                source_fps = src.stats().fps
+            # imshow copies into the window buffer, so repainting `img` in place is safe.
+            paint_stamp(img, int(clock.now() * 1000))
+            cv2.imshow(window, img)
             cv2.waitKey(1)
     finally:
         done.set()
         consumer.join()
         cv2.destroyWindow(window)
-    return ages, attempts
+    return LoopbackRun(
+        collector.ages_ms, collector.received, source_fps or 0.0, collector.error
+    )
 
 
 def _run_loopback(index: int, monitor_index: int | None) -> int:
     try:
-        monitors = _list_monitors()
+        monitors = list_monitors()
     except (RuntimeError, OSError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2
@@ -314,17 +277,17 @@ def _run_loopback(index: int, monitor_index: int | None) -> int:
         print(f"error: {exc}", file=sys.stderr)
         return 1
     with src:
-        ages, attempts = _measure_loopback(src, monitor)
-    summary = summarize_loopback(ages, attempts)
+        run = _measure_loopback(src, monitor)
+    summary = summarize_loopback(run.ages_ms, run.received, run.source_fps)
     print(
-        f"monitor {monitor.index} refresh {monitor.refresh_hz} Hz; "
-        f"decoded {len(ages)}/{attempts} frames ({summary.decode_rate:.1%})"
+        f"monitor {monitor.index} refresh {monitor.refresh_hz} Hz; source {run.source_fps:.1f} "
+        f"fps; decoded {summary.decoded}/{summary.received} frames ({summary.decode_rate:.1%})"
     )
+    if run.error is not None:
+        print(f"measurement failed: {run.error}", file=sys.stderr)
+        return 1
     if not summary.valid:
-        print(
-            f"measurement invalid: decode rate below {MIN_DECODE_RATE:.0%}",
-            file=sys.stderr,
-        )
+        print(f"measurement invalid: {summary.reason}", file=sys.stderr)
         return 1
     print(
         f"frame age p50 {summary.p50_ms:.1f} ms, p99 {summary.p99_ms:.1f} ms "

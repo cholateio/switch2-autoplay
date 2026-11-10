@@ -10,6 +10,7 @@ from autoplay.core.tools.pattern import (
     cell_span,
     decode_stamp,
     encode_stamp,
+    paint_stamp,
     stamp_age_ms,
 )
 
@@ -23,6 +24,15 @@ def test_pattern_roundtrip_all_bits():
         assert img.shape == (1080, 1920, 3)
         assert img.dtype == np.uint8
         assert decode_stamp(img) == ms
+
+
+def test_paint_stamp_repaints_in_place():
+    img = encode_stamp(0x000000, SIZE)
+    buffer = img.ctypes.data
+    paint_stamp(img, 0xABCDEF)
+    assert img.ctypes.data == buffer
+    assert np.array_equal(img, encode_stamp(0xABCDEF, SIZE))
+    assert decode_stamp(img) == 0xABCDEF
 
 
 def test_encode_keeps_low_24_bits():

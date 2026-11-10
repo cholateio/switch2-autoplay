@@ -41,11 +41,18 @@ def encode_stamp(ms: int, size: tuple[int, int]) -> np.ndarray:
     """Draw the low 24 bits of `ms` as a BGR uint8 pattern; `size` is (width, height)."""
     width, height = size
     img = np.full((height, width, 3), _BACKGROUND, dtype=np.uint8)
+    paint_stamp(img, ms)
+    return img
+
+
+def paint_stamp(img: np.ndarray, ms: int) -> None:
+    """Repaint only the cells of a pattern made by `encode_stamp` so it shows `ms`;
+    the background is left untouched."""
+    height, width = img.shape[:2]
     y0, y1 = round(height * _Y_BAND[0]), round(height * _Y_BAND[1])
     for i, value in enumerate(_cell_values(ms)):
         x0, x1 = cell_span(i, width)
         img[y0:y1, x0:x1] = 255 if value else 0
-    return img
 
 
 def decode_stamp(bgr: np.ndarray) -> int | None:

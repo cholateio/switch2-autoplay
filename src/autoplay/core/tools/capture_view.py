@@ -99,14 +99,20 @@ def _save(bgr: np.ndarray, label: str) -> Path:
 def _preview(src: DeviceSource, labels: list[str]) -> None:
     label = labels[0]
     frame = None
+    base = None
+    black = False
     cv2.namedWindow(_WINDOW, cv2.WINDOW_AUTOSIZE)
     try:
         while True:
             newer = src.wait_next(frame.seq if frame else 0, 0.1)
             if newer is not None:
                 frame = newer
-                view = cv2.resize(frame.bgr, PREVIEW_SIZE, interpolation=cv2.INTER_AREA)
-                _draw_overlay(view, overlay_lines(src.stats(), is_black(view), label))
+                base = cv2.resize(frame.bgr, PREVIEW_SIZE, interpolation=cv2.INTER_AREA)
+                black = is_black(base)
+            # Redrawn on timeouts too, so fps and the STALE marker update while the stream is stopped.
+            if base is not None:
+                view = base.copy()
+                _draw_overlay(view, overlay_lines(src.stats(), black, label))
                 cv2.imshow(_WINDOW, view)
             key = cv2.waitKey(1)
             if (

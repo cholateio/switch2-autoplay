@@ -1,3 +1,4 @@
+import logging
 import threading
 import time
 
@@ -5,6 +6,7 @@ import cv2
 import numpy as np
 import pytest
 
+from autoplay.core import clock
 from autoplay.core.capture import device
 from autoplay.core.capture.base import CaptureError
 from autoplay.core.capture.device import DeviceSource
@@ -174,3 +176,53 @@ def test_close_stops_thread():
     time.sleep(0.02)
     assert fake.produced == produced
     src.close()
+
+
+def test_frame_ts_comes_from_project_clock():
+    fake = FakeCapture(limit=1)
+    src, _ = make_source(fake)
+    before = clock.now()
+    with src:
+        src.start()
+        frame = src.latest()
+        after = clock.now()
+    assert before <= frame.ts <= after
+
+
+# Delivers one frame, then read() blocks until `gate` is set, like a hung driver.
+class BlockingCapture(FakeCapture):
+    def __init__(self):
+        super().__init__()
+        self.gate = threading.Event()
+
+    def read(self):
+        if self.produced == 0:
+            return super().read()
+        self.gate.wait()
+        return False, None
+
+
+def test_close_does_not_release_during_in_flight_read(monkeypatch, caplog):
+    monkeypatch.setattr(device, "_JOIN_TIMEOUT_S", 0.05)
+    fake = BlockingCapture()
+    src, _ = make_source(fake)
+    src.start()
+    with caplog.at_level(logging.WARNING, logger=device.__name__):
+        src.close()
+    assert not fake.released
+    warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
+    assert len(warnings) == 1
+    assert "index 0" in warnings[0].getMessage()
+    fake.gate.set()
+    assert wait_until(lambda: fake.released)
+
+
+def test_source_is_single_use():
+    fake = FakeCapture()
+    src, _ = make_source(fake)
+    src.start()
+    with pytest.raises(RuntimeError, match="single-use"):
+        src.start()
+    src.close()
+    with pytest.raises(RuntimeError, match="single-use"):
+        src.start()

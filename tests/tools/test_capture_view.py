@@ -5,10 +5,12 @@ import numpy as np
 import pytest
 
 from autoplay.cli import main
+from autoplay.core.capture.base import CaptureStats
 from autoplay.core.tools import capture_view
 from autoplay.core.tools.capture_view import (
     is_black,
     label_for_key,
+    overlay_lines,
     parse_device_source,
     parse_labels,
     screenshot_path,
@@ -81,3 +83,27 @@ def test_capture_rejects_unsupported_source_without_opening(monkeypatch, capsys)
 def test_capture_help(capsys):
     assert main(["capture", "--help"]) == 0
     assert "--labels" in capsys.readouterr().out
+
+
+def _stats(stale):
+    return CaptureStats(
+        width=1920,
+        height=1080,
+        fourcc="YUY2",
+        fps=0.0 if stale else 59.9,
+        frames=10,
+        stale=stale,
+    )
+
+
+def test_overlay_marks_stale_stream():
+    lines = overlay_lines(_stats(stale=True), black=False, label="menu")
+    assert any("STALE" in line for line in lines)
+    assert any("0.0 fps" in line for line in lines)
+
+
+def test_overlay_without_stale_marker_when_live():
+    lines = overlay_lines(_stats(stale=False), black=True, label="menu")
+    assert not any("STALE" in line for line in lines)
+    assert any("59.9 fps" in line and "1920x1080" in line for line in lines)
+    assert any("black: yes" in line and "menu" in line for line in lines)
