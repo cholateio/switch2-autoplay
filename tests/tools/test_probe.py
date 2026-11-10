@@ -244,3 +244,10 @@ def test_probe_table_continues_past_failing_combinations(capsys):
 def test_probe_help(capsys):
     assert main(["probe", "--help"]) == 0
     assert "--loopback" in capsys.readouterr().out
+
+
+def test_loopback_invalid_when_source_reported_no_fps():
+    summary = summarize_loopback([10], received=1, source_fps=0.0, seconds=10)
+    assert summary.decode_rate == pytest.approx(1.0)
+    assert not summary.valid
+    assert "0 fps" in summary.reason

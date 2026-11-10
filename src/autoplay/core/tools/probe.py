@@ -91,8 +91,9 @@ def summarize_loopback(
     seconds: float = LOOPBACK_SECONDS,
 ) -> LoopbackSummary:
     """Judge a loopback run. Ages above MAX_AGE_MS count as decode failures. The run
-    is valid only if it received at least MIN_RECEIVED_FRACTION x seconds x
-    source_fps frames and decoded at least MIN_DECODE_RATE of them."""
+    is valid only if source_fps is positive, it received at least
+    MIN_RECEIVED_FRACTION x seconds x source_fps frames and it decoded at least
+    MIN_DECODE_RATE of them."""
     plausible = [age for age in ages_ms if age <= MAX_AGE_MS]
     rate = len(plausible) / received if received else 0.0
     min_frames = math.ceil(MIN_RECEIVED_FRACTION * seconds * source_fps)
@@ -101,7 +102,9 @@ def summarize_loopback(
     else:
         p50 = p99 = math.nan
     reason = None
-    if received < min_frames:
+    if source_fps <= 0:
+        reason = "source reported 0 fps when the measurement started"
+    elif received < min_frames:
         reason = (
             f"received {received} frames, need at least {min_frames} "
             f"({MIN_RECEIVED_FRACTION:.0%} of {seconds:g} s x {source_fps:.1f} fps)"

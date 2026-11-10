@@ -226,3 +226,17 @@ def test_source_is_single_use():
     src.close()
     with pytest.raises(RuntimeError, match="single-use"):
         src.start()
+
+
+class GetFailsCapture(FakeCapture):
+    def get(self, prop):
+        raise RuntimeError("driver query failed")
+
+
+def test_start_releases_device_when_setup_fails_before_reader_thread():
+    fake = GetFailsCapture()
+    src, _ = make_source(fake)
+    with pytest.raises(RuntimeError, match="driver query failed"):
+        src.start()
+    assert fake.released
+    src.close()

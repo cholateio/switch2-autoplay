@@ -105,14 +105,21 @@ class DeviceSource(FrameSource):
         self._cap = open_capture(
             self._index, backend=self._backend, opener=self._opener, **self._config
         )
-        self._fourcc = fourcc_str(self._cap.get(cv2.CAP_PROP_FOURCC))
-        self._thread = threading.Thread(
-            target=self._run,
-            args=(self._cap,),
-            name=f"capture-device-{self._index}",
-            daemon=True,
-        )
-        self._thread.start()
+        try:
+            self._fourcc = fourcc_str(self._cap.get(cv2.CAP_PROP_FOURCC))
+            thread = threading.Thread(
+                target=self._run,
+                args=(self._cap,),
+                name=f"capture-device-{self._index}",
+                daemon=True,
+            )
+            thread.start()
+        except BaseException:
+            # No reader thread exists yet, so nothing else would release the device.
+            self._cap.release()
+            self._cap = None
+            raise
+        self._thread = thread
         with self._cond:
             got = self._cond.wait_for(
                 lambda: self._latest is not None, _FIRST_FRAME_TIMEOUT_S
