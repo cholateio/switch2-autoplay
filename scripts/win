@@ -40,4 +40,11 @@ if ! uv=$(command -v uv.exe); then
     fi
 fi
 
+# Smart App Control blocks unsigned console-script launchers (pytest.exe, ap.exe)
+# with os error 4551; python.exe is allowed, so route these through `python -m`.
+case "${1:-}" in
+    pytest) shift; set -- python -m pytest "$@" ;;
+    ap) shift; set -- python -m autoplay "$@" ;;
+esac
+
 exec "$uv" run --project "$repo_unc" --directory "$repo_unc" "$@"

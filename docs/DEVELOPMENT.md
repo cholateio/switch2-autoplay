@@ -6,7 +6,7 @@ Everything you need to pick this project back up after months away.
 
 ```bash
 uv run pytest                                  # WSL: sync the Linux venv (.venv/) and run the pure-logic tests
-scripts/win python -m pytest tests/test_cli.py -v   # Windows-native Python, same checkout
+scripts/win pytest tests/test_cli.py -v        # Windows-native Python, same checkout
 scripts/win ap --version                       # the CLI under Windows
 ```
 
@@ -26,6 +26,7 @@ There is one checkout, inside WSL. Both environments use it directly.
 - The working directory is the repo root (as `\\wsl.localhost\…`), so relative paths in arguments are relative to the repo root, and `fixtures/` and `runs/` written by Windows Python land in this same WSL checkout. There is no mirror copy.
 - The venv is kept off the UNC share: the script resolves `%LOCALAPPDATA%` through `cmd.exe` and sets `UV_PROJECT_ENVIRONMENT`, appending it to `WSLENV` so it reaches `uv.exe`.
 - It finds `uv.exe` on `PATH` first, otherwise at `%USERPROFILE%\.local\bin\uv.exe`.
+- A first argument of `pytest` or `ap` is rewritten to `python -m pytest` / `python -m autoplay`, because Smart App Control blocks the unsigned console-script launchers (`pytest.exe`, `ap.exe`) with os error 4551. Other arguments pass through unchanged.
 - `scripts/win --print-env` prints the resolved venv path and runs nothing.
 
 ## How uv was installed on Windows
@@ -43,12 +44,12 @@ The installer refuses to run under the default execution policy; `-ExecutionPoli
 |---------|---------|
 | `uv run pytest` | Pure-logic test suite (WSL) |
 | `uv run ruff check .` | Lint |
-| `scripts/win python -m pytest …` | Tests under Windows-native Python |
+| `scripts/win pytest …` | Tests under Windows-native Python |
 | `scripts/win ap …` | The `ap` CLI under Windows-native Python |
 
 ## Easy to forget
 
-- Windows Smart App Control is on and blocks some unsigned console-script launchers in the Windows venv: `scripts/win pytest …` fails with `Failed to spawn: pytest … (os error 4551)`. Use `scripts/win python -m pytest …`. `ap.exe` and `ruff.exe` currently run. The block is logged as Code Integrity event 3077 in `Microsoft-Windows-CodeIntegrity/Operational`.
+- Windows Smart App Control is on. Any other venv launcher you call through `scripts/win` (e.g. `numpy-config`) may fail with `Failed to spawn: … (os error 4551)`; call it as `scripts/win python -m <module>` instead. Blocks are logged as Code Integrity event 3077 in `Microsoft-Windows-CodeIntegrity/Operational`.
 - `scripts/win` runs from the repo root, not your current directory.
 - Python's `write_text` does not create parent directories; `runs/` and `fixtures/` must exist before something writes into them.
 - `fixtures/` and `runs/` are gitignored. Never commit game screenshots, recordings or other people's videos; tests use synthetic frames.
