@@ -1,7 +1,10 @@
+import contextlib
 import logging
 import threading
 import time
 
+import av
+import av.logging
 import numpy as np
 import pytest
 
@@ -13,6 +16,7 @@ from autoplay.core.capture.device import (
     DeviceSource,
     open_capture,
     parse_device_list,
+    resolve_device,
 )
 
 
@@ -294,3 +298,46 @@ def test_av_capture_reads_bgr_frames_from_a_real_input():
 def test_av_capture_open_failure_propagates():
     with pytest.raises(Exception, match="no-such-filter"):
         AvCapture("no-such-filter", "lavfi", {})
+
+
+def test_resolve_device_distinguishes_devices_with_the_same_name():
+    names = ["Cam", "Card", "Cam", "Cam"]
+    assert resolve_device(names, 0) == ("Cam", 0)
+    assert resolve_device(names, 1) == ("Card", 0)
+    assert resolve_device(names, 2) == ("Cam", 1)
+    assert resolve_device(names, 3) == ("Cam", 2)
+
+
+def test_resolve_device_rejects_an_index_out_of_range():
+    with pytest.raises(CaptureError, match='index 1; found 0: "Cam"'):
+        resolve_device(["Cam"], 1)
+    with pytest.raises(CaptureError, match="found none"):
+        resolve_device([], 0)
+    with pytest.raises(CaptureError):
+        resolve_device(["Cam"], -1)
+
+
+def _open_missing_filter():
+    with contextlib.suppress(Exception):
+        av.open("no-such-filter", format="lavfi")
+
+
+def test_logged_output_captures_and_restores_the_callers_log_level():
+    av.logging.set_level(av.logging.WARNING)
+    try:
+        text = device.logged_output(_open_missing_filter)
+        assert av.logging.get_level() == av.logging.WARNING
+    finally:
+        av.logging.set_level(None)
+    assert text != ""
+    assert device.logged_output(lambda: None) == ""
+    assert av.logging.get_level() is None
+
+
+def test_logged_output_restores_the_log_level_when_the_action_raises():
+    def boom():
+        raise RuntimeError("boom")
+
+    with pytest.raises(RuntimeError, match="boom"):
+        device.logged_output(boom)
+    assert av.logging.get_level() is None

@@ -30,6 +30,7 @@ _DRAIN_TIMEOUT_S = 1.0
 # the reader stalls. 4 bytes per pixel is an upper bound for every format above.
 _QUEUE_FRAMES = 4
 _DEVICE_LINE = re.compile(r'^"(?P<name>.+)" \((?P<kinds>[^)]*)\)$')
+_LOG_LOCK = threading.Lock()
 
 _log = logging.getLogger(__name__)
 
@@ -60,6 +61,38 @@ def parse_device_list(text: str) -> list[str]:
     return names
 
 
+def resolve_device(names: list[str], index: int) -> tuple[str, int]:
+    """Return the name of device `index` and its ordinal among the devices that
+    share that name; raise `CaptureError` listing the devices if there is no
+    such index."""
+    if not 0 <= index < len(names):
+        found = ", ".join(f'{i}: "{name}"' for i, name in enumerate(names)) or "none"
+        raise CaptureError(f"no capture device index {index}; found {found}")
+    return names[index], names[:index].count(names[index])
+
+
+def logged_output(action: Callable[[], None]) -> str:
+    """Run `action` and return what the ffmpeg libraries logged meanwhile."""
+    # PyAV's log level and capture are process-global: one caller at a time, and
+    # the caller's level is put back.
+    with _LOG_LOCK:
+        previous = av.logging.get_level()
+        av.logging.set_level(av.logging.INFO)
+        try:
+            with av.logging.Capture() as logs:
+                action()
+        finally:
+            av.logging.set_level(previous)
+    return "".join(message for _, _, message in logs)
+
+
+def _request_device_list() -> None:
+    try:
+        av.open("dummy", format=_INPUT_FORMAT, options={"list_devices": "true"})
+    except av.error.ExitError:
+        pass
+
+
 def list_devices() -> list[str]:
     """Return the names of the DirectShow video capture devices; a device's
     index is its position in this list."""
@@ -67,16 +100,7 @@ def list_devices() -> list[str]:
         raise CaptureError("capture devices are only available on Windows")
     # The input offers its device list only as log output: the built-in
     # enumeration fails on a machine with no audio-only device.
-    av.logging.set_level(av.logging.INFO)
-    try:
-        with av.logging.Capture() as logs:
-            try:
-                av.open("dummy", format=_INPUT_FORMAT, options={"list_devices": "true"})
-            except av.error.ExitError:
-                pass
-    finally:
-        av.logging.set_level(None)
-    return parse_device_list("".join(message for _, _, message in logs))
+    return parse_device_list(logged_output(_request_device_list))
 
 
 class AvCapture:
@@ -124,11 +148,10 @@ class AvCapture:
 
 
 def _open_device(index: int, options: Mapping[str, str]) -> Capture:
-    names = list_devices()
-    if not 0 <= index < len(names):
-        found = ", ".join(f'{i}: "{name}"' for i, name in enumerate(names)) or "none"
-        raise CaptureError(f"no capture device index {index}; found {found}")
-    cap = AvCapture(f"video={names[index]}", _INPUT_FORMAT, options)
+    name, ordinal = resolve_device(list_devices(), index)
+    # The input opens the first device with a matching name unless told which one.
+    options = {**options, "video_device_number": str(ordinal)}
+    cap = AvCapture(f"video={name}", _INPUT_FORMAT, options)
     try:
         cap.drain()
     except BaseException:

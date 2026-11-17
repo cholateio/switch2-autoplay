@@ -46,11 +46,23 @@ fi
 # it starts. A copy of the real interpreter next to pyvenv.cfg runs as the venv's
 # python, so the launcher is replaced whenever the two files differ.
 venv_dir=$(wslpath -u "$UV_PROJECT_ENVIRONMENT")
-if [[ -f "$venv_dir/pyvenv.cfg" ]]; then
-    base_dir=$(wslpath -u "$(sed -n 's/^home *= *//p' "$venv_dir/pyvenv.cfg" | tr -d '\r')")
-    if [[ -f "$base_dir/python.exe" ]] && ! cmp -s "$base_dir/python.exe" "$venv_dir/Scripts/python.exe"; then
-        cp "$base_dir"/python.exe "$base_dir"/python3*.dll "$base_dir"/vcruntime*.dll "$venv_dir/Scripts/"
-    fi
+if [[ ! -f "$venv_dir/pyvenv.cfg" ]]; then
+    # `uv run` would create the venv and start its launcher in one step, so the
+    # venv is created here first; creating it does not run the launcher.
+    "$uv" venv --quiet --project "$repo_unc" --directory "$repo_unc" "$UV_PROJECT_ENVIRONMENT" >&2
+fi
+home=$(sed -n 's/^home *= *//p' "$venv_dir/pyvenv.cfg" | tr -d '\r' | head -n 1)
+if [[ -z "$home" ]]; then
+    echo "scripts/win: no 'home' line in $venv_dir/pyvenv.cfg; delete that venv and rerun" >&2
+    exit 1
+fi
+base_dir=$(wslpath -u "$home")
+if [[ ! -f "$base_dir/python.exe" ]]; then
+    echo "scripts/win: no python.exe in $home (from pyvenv.cfg); delete the venv and rerun" >&2
+    exit 1
+fi
+if ! cmp -s "$base_dir/python.exe" "$venv_dir/Scripts/python.exe"; then
+    cp "$base_dir"/python.exe "$base_dir"/python3*.dll "$base_dir"/vcruntime*.dll "$venv_dir/Scripts/"
 fi
 
 # Smart App Control also blocks the unsigned console-script launchers (pytest.exe,
