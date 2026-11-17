@@ -47,6 +47,9 @@ The installer refuses to run under the default execution policy; `-ExecutionPoli
 | `uv run ruff check .` | Lint |
 | `scripts/win pytest …` | Tests under Windows-native Python |
 | `scripts/win ap …` | The `ap` CLI under Windows-native Python |
+| `scripts/win ap probe` | List capture devices and measure size, format and frame rate |
+| `scripts/win ap probe --loopback --monitor N` | Measure how old captured frames are (PC output wired to the card) |
+| `scripts/win ap capture --labels a,b,c` | Preview the capture card and save labelled screenshots to `fixtures/screens/` |
 
 ## Hardware facts
 
@@ -60,6 +63,7 @@ Measured on 2026-11-17 on the owner's machine.
 - **Serial ports**: the ESP32-S3's CH343P port is `COM4` (`USB-Enhanced-SERIAL CH343`, `VID_1A86`). `COM3` (`VID_264A`) is an unrelated device.
 - **ESP32-S3 board**: ESP32-S3 rev v0.2, 16 MB flash, 8 MB PSRAM. `esptool --chip esp32s3 --port COM4 --baud 460800` enters the bootloader by itself (no BOOT button) and flashed a 330 KB image in 3.9 s.
 - **The zero-code controller check was not done.** PokemonAutomation's `PABotBase2-ESP32-S3-2026092800.bin` (v0.70.10) was flashed at offset 0 and verified, but Smart App Control blocks its unsigned Windows client (`SerialPrograms.exe`), and the owner chose to leave Smart App Control on. So the PC-to-ESP32 serial side is verified; the ESP32 OTG port to the Switch 2 dock is not, and is first exercised by our own firmware in M1.
+- **Reference screenshots**: `ap capture` saved 24 full-resolution (1920×1080) screenshots under the gitignored `fixtures/screens/<label>/`, at least three each for `main_menu`, `in_game`, `dialog`, `dialog_choice`, `loading_black`, `move_wheel` and `workbench`. The loading screen is pure black (mean luma 0.0).
 - **Switch 2 idle behaviour**: after a few minutes without input the console dims the picture while still sending a signal; press a button before saving screenshots. Turn auto-sleep off for long runs: a sleeping console and a dead capture stream look the same from the capture side.
 
 ## Easy to forget
