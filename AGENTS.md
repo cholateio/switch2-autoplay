@@ -7,7 +7,7 @@ A machine that gives a model eyes (a capture card) and hands (an ESP32-S3 posing
 
 ## Stack
 
-- Language / framework: Python 3.12 (`requires-python >= 3.11`) managed by uv; numpy, OpenCV, pyserial, PyYAML; ESP32-S3 firmware later
+- Language / framework: Python 3.12 (`requires-python >= 3.11`) managed by uv; numpy, OpenCV (image processing), PyAV (capture-device input), pyserial, PyYAML; ESP32-S3 firmware later
 - Services: Anthropic Claude API for the agent loop (later milestones); nothing else
 - Test: `uv run pytest`
 

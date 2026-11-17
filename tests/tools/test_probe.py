@@ -4,7 +4,6 @@ import sys
 import threading
 import time
 
-import cv2
 import numpy as np
 import pytest
 
@@ -207,24 +206,15 @@ def test_monitor_without_loopback_is_a_usage_error(monkeypatch, capsys):
     assert "--loopback" in capsys.readouterr().err
 
 
-# Delivers 8x8 frames, but read() raises cv2.error once NV12 has been requested.
+# Delivers 8x8 frames; NV12 opens but read() raises, UYVY cannot be opened.
 class _TableCapture:
-    def __init__(self):
-        self.props = {}
-
-    def isOpened(self):
-        return True
-
-    def set(self, prop, value):
-        self.props[prop] = value
-        return True
-
-    def get(self, prop):
-        return self.props.get(prop, 0.0)
+    def __init__(self, options):
+        self.options = options
+        self.fourcc = "YUY2"
 
     def read(self):
-        if self.props.get(cv2.CAP_PROP_FOURCC) == cv2.VideoWriter.fourcc(*"NV12"):
-            raise cv2.error("simulated driver failure")
+        if self.options["pixel_format"] == "nv12":
+            raise RuntimeError("simulated driver failure")
         time.sleep(0.002)
         return True, np.zeros((8, 8, 3), np.uint8)
 
@@ -232,43 +222,56 @@ class _TableCapture:
         pass
 
 
-def _table_opener(index, api):
-    if api == cv2.CAP_MSMF:
-        raise RuntimeError("msmf exploded")
-    return _TableCapture()
+def _table_opener(index, options):
+    if options["pixel_format"] == "uyvy422":
+        raise OSError("I/O error")
+    return _TableCapture(options)
 
 
-def _in_process(index, backend, fourcc):
-    return probe._probe_one(index, backend, fourcc, _table_opener, 0.05)
+def _in_process(index, fourcc):
+    return probe._probe_one(index, fourcc, _table_opener, 0.05)
 
 
-def test_probe_table_continues_past_failing_combinations(capsys):
-    assert probe._run_table(0, run_row=_in_process) == 0
-    rows = capsys.readouterr().out.strip().splitlines()[1:]
-    assert len(rows) == 6
-    by_key = {tuple(r.split()[:2]): r for r in rows}
-    assert "8x8" in by_key[("dshow", "YUY2")]
-    assert "8x8" in by_key[("dshow", "MJPG")]
-    assert "unavailable" in by_key[("dshow", "NV12")]
-    assert "simulated driver failure" in by_key[("dshow", "NV12")]
-    for fourcc in ("YUY2", "NV12", "MJPG"):
-        assert "msmf exploded" in by_key[("msmf", fourcc)]
+def _two_devices():
+    return ["Fake Webcam", "Fake Card"]
+
+
+def test_probe_table_continues_past_failing_formats(capsys):
+    assert probe._run_table(0, run_row=_in_process, devices=_two_devices) == 0
+    lines = capsys.readouterr().out.strip().splitlines()
+    assert lines[:2] == ["device 0: Fake Webcam", "device 1: Fake Card"]
+    rows = {r.split()[0]: r for r in lines[3:]}
+    assert list(rows) == ["YUY2", "NV12", "UYVY"]
+    assert "8x8" in rows["YUY2"]
+    assert "simulated driver failure" in rows["NV12"]
+    assert "unavailable" in rows["UYVY"]
+    assert "I/O error" in rows["UYVY"]
 
 
 def test_probe_table_fails_when_nothing_was_measured(capsys):
-    def nothing(index, backend, fourcc):
-        return ProbeRow(f"{backend} {fourcc} unavailable (no device)", False)
+    def nothing(index, fourcc):
+        return ProbeRow(f"{fourcc} unavailable (no device)", False)
 
-    assert probe._run_table(0, run_row=nothing) == 1
+    assert probe._run_table(0, run_row=nothing, devices=_two_devices) == 1
     out = capsys.readouterr()
-    assert len(out.out.strip().splitlines()) == 7
-    assert "no backend" in out.err
+    assert len(out.out.strip().splitlines()) == 6
+    assert "no format" in out.err
+
+
+def test_probe_table_reports_a_failed_device_listing(capsys):
+    def no_listing():
+        raise probe.CaptureError("capture devices are only available on Windows")
+
+    assert probe._run_table(0, run_row=_in_process, devices=no_listing) == 1
+    out = capsys.readouterr()
+    assert "only available on Windows" in out.err
+    assert out.out == ""
 
 
 # Delivers a single frame, then fails every read.
 class _OneFrameCapture(_TableCapture):
     def __init__(self):
-        super().__init__()
+        super().__init__({"pixel_format": "yuyv422"})
         self.reads = 0
 
     def read(self):
@@ -280,14 +283,14 @@ class _OneFrameCapture(_TableCapture):
 
 
 def test_one_frame_is_not_a_measurement():
-    row = probe._probe_one(0, "dshow", "YUY2", lambda i, a: _OneFrameCapture(), 0.05)
+    row = probe._probe_one(0, "YUY2", lambda i, o: _OneFrameCapture(), 0.05)
     assert not row.measured
     assert "unavailable" in row.text
     assert "nan" not in row.text
 
 
-def test_row_command_runs_one_combination_in_a_child_interpreter():
-    assert probe._row_command(3, "msmf", "NV12") == [
+def test_row_command_runs_one_format_in_a_child_interpreter():
+    assert probe._row_command(3, "NV12") == [
         sys.executable,
         "-m",
         "autoplay",
@@ -295,36 +298,36 @@ def test_row_command_runs_one_combination_in_a_child_interpreter():
         "--index",
         "3",
         "--only",
-        "msmf:NV12",
+        "NV12",
     ]
 
 
 def test_spawn_row_kills_a_hung_probe():
     hung = [sys.executable, "-c", "import time; time.sleep(60)"]
     t0 = time.monotonic()
-    row = probe._spawn_row(0, "dshow", "YUY2", timeout=0.5, command=hung)
+    row = probe._spawn_row(0, "YUY2", timeout=0.5, command=hung)
     assert time.monotonic() - t0 < 20
     assert not row.measured
-    assert row.text.split()[:2] == ["dshow", "YUY2"]
+    assert row.text.split()[0] == "YUY2"
     assert "timed out" in row.text
 
 
 def test_spawn_row_relays_the_child_row_and_status():
-    fine = [sys.executable, "-c", "print('dshow   YUY2   8x8 row')"]
-    row = probe._spawn_row(0, "dshow", "YUY2", timeout=60, command=fine)
-    assert row == ProbeRow("dshow   YUY2   8x8 row", True)
+    fine = [sys.executable, "-c", "print('YUY2   8x8 row')"]
+    row = probe._spawn_row(0, "YUY2", timeout=60, command=fine)
+    assert row == ProbeRow("YUY2   8x8 row", True)
     failed = [
         sys.executable,
         "-c",
-        "import sys; print('dshow   YUY2   unavailable (x)'); sys.exit(1)",
+        "import sys; print('YUY2   unavailable (x)'); sys.exit(1)",
     ]
-    row = probe._spawn_row(0, "dshow", "YUY2", timeout=60, command=failed)
-    assert row == ProbeRow("dshow   YUY2   unavailable (x)", False)
+    row = probe._spawn_row(0, "YUY2", timeout=60, command=failed)
+    assert row == ProbeRow("YUY2   unavailable (x)", False)
 
 
 def test_spawn_row_reports_a_probe_that_died_without_a_row():
     crashed = [sys.executable, "-c", "import sys; sys.exit(3)"]
-    row = probe._spawn_row(0, "dshow", "YUY2", timeout=60, command=crashed)
+    row = probe._spawn_row(0, "YUY2", timeout=60, command=crashed)
     assert not row.measured
     assert "exited with code 3" in row.text
 
@@ -332,29 +335,29 @@ def test_spawn_row_reports_a_probe_that_died_without_a_row():
 # The combination is rejected before any device is opened, so this is safe on
 # a machine with real capture hardware.
 def test_spawn_row_reaches_the_cli_in_a_child_interpreter():
-    row = probe._spawn_row(0, "bogus", "XXXX", timeout=120)
+    row = probe._spawn_row(0, "XXXX", timeout=120)
     assert not row.measured
     assert "exited with code 2" in row.text
 
 
 def test_only_measures_one_combination(capsys):
-    assert probe._run_only(0, "dshow:YUY2", opener=_table_opener, seconds=0.05) == 0
+    assert probe._run_only(0, "YUY2", opener=_table_opener, seconds=0.05) == 0
     rows = capsys.readouterr().out.strip().splitlines()
     assert len(rows) == 1
     assert "8x8" in rows[0]
 
 
 def test_only_exits_nonzero_when_unavailable(capsys):
-    assert probe._run_only(0, "msmf:YUY2", opener=_table_opener, seconds=0.05) == 1
-    assert "msmf exploded" in capsys.readouterr().out
+    assert probe._run_only(0, "UYVY", opener=_table_opener, seconds=0.05) == 1
+    assert "I/O error" in capsys.readouterr().out
 
 
 def test_only_rejects_unknown_combinations(monkeypatch, capsys):
     monkeypatch.setattr(probe, "open_capture", _no_device)
     monkeypatch.setattr(probe, "DeviceSource", _no_device)
-    assert main(["probe", "--only", "v4l2:YUY2"]) == 2
-    assert main(["probe", "--only", "dshow"]) == 2
-    assert main(["probe", "--loopback", "--only", "dshow:YUY2"]) == 2
+    assert main(["probe", "--only", "MJPG"]) == 2
+    assert main(["probe", "--only", "dshow:YUY2"]) == 2
+    assert main(["probe", "--loopback", "--only", "YUY2"]) == 2
     assert "--only" in capsys.readouterr().err
 
 
@@ -374,11 +377,11 @@ _BLOCKED_CHILD = """
 import threading
 from autoplay.core.tools import probe
 
-def opener(index, api):
+def opener(index, options):
     threading.Event().wait()
 
 raise SystemExit(
-    probe._run_only(0, "dshow:YUY2", opener=opener, seconds=0.05, deadline=0.5)
+    probe._run_only(0, "YUY2", opener=opener, seconds=0.05, deadline=0.5)
 )
 """
 
@@ -413,8 +416,8 @@ def test_only_disarms_its_deadline_after_the_row(monkeypatch, capsys):
         return armed[-1][1]
 
     monkeypatch.setattr(probe, "_arm_deadline", arm)
-    assert probe._run_only(0, "dshow:YUY2", opener=_table_opener, seconds=0.05) == 0
+    assert probe._run_only(0, "YUY2", opener=_table_opener, seconds=0.05) == 0
     assert [seconds for seconds, _ in armed] == [probe.ROW_TIMEOUT_S]
     assert armed[0][1].cancelled
-    assert probe._run_only(0, "nope:YUY2") == 2
+    assert probe._run_only(0, "nope") == 2
     assert len(armed) == 1

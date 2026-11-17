@@ -2,36 +2,30 @@ import logging
 import threading
 import time
 
-import cv2
 import numpy as np
 import pytest
 
 from autoplay.core import clock
 from autoplay.core.capture import device
 from autoplay.core.capture.base import CaptureError
-from autoplay.core.capture.device import DeviceSource
+from autoplay.core.capture.device import (
+    AvCapture,
+    DeviceSource,
+    open_capture,
+    parse_device_list,
+)
 
 
-# Stands in for cv2.VideoCapture; frame n is an 8x8 image filled with n % 256.
+# Stands in for an open capture device; frame n is an 8x8 image filled with n % 256.
 class FakeCapture:
-    def __init__(self, *, opened=True, limit=None, delay=0.001):
-        self.opened = opened
+    fourcc = "YUY2"
+
+    def __init__(self, *, limit=None, delay=0.001):
         self.limit = limit
         self.delay = delay
         self.failing = False
         self.produced = 0
         self.released = False
-        self.props = {}
-
-    def isOpened(self):
-        return self.opened
-
-    def set(self, prop, value):
-        self.props[prop] = value
-        return True
-
-    def get(self, prop):
-        return self.props.get(prop, 0.0)
 
     def read(self):
         time.sleep(self.delay)
@@ -98,44 +92,62 @@ def test_wait_next_times_out_returns_none():
 
 
 def test_start_raises_when_device_cannot_open():
-    fake = FakeCapture(opened=False)
-    src, _ = make_source(fake)
+    def opener(index, options):
+        raise OSError("I/O error")
+
+    src = DeviceSource(0, opener=opener)
     with pytest.raises(CaptureError) as exc:
         src.start()
     assert "index 0" in str(exc.value)
-    assert "dshow" in str(exc.value)
-    assert fake.released
+    assert "1920x1080 YUY2 at 60 fps" in str(exc.value)
+    assert "I/O error" in str(exc.value)
+    src.close()
+
+
+def test_opener_capture_error_is_not_rewrapped():
+    def opener(index, options):
+        raise CaptureError("no capture device index 3; found none")
+
+    with pytest.raises(CaptureError, match="found none") as exc:
+        open_capture(3, width=1920, height=1080, fps=60, fourcc="YUY2", opener=opener)
+    assert "cannot open" not in str(exc.value)
 
 
 def test_start_raises_when_no_first_frame(monkeypatch):
     monkeypatch.setattr(device, "_FIRST_FRAME_TIMEOUT_S", 0.1)
     fake = FakeCapture(limit=0)
-    src, _ = make_source(fake, backend="msmf")
+    src, _ = make_source(fake)
     with pytest.raises(CaptureError) as exc:
         src.start()
     assert "index 0" in str(exc.value)
-    assert "msmf" in str(exc.value)
+    assert "signal" in str(exc.value)
     assert fake.released
 
 
-def test_start_configures_device():
+def test_start_requests_the_configured_mode():
     fake = FakeCapture(limit=1)
+    fake.fourcc = "NV12"
     src, calls = make_source(fake, width=1280, height=720, fps=30, fourcc="NV12")
     with src:
         src.start()
-        assert calls == [(0, cv2.CAP_DSHOW)]
-        assert fake.props[cv2.CAP_PROP_BUFFERSIZE] == 1
-        assert fake.props[cv2.CAP_PROP_FOURCC] == cv2.VideoWriter.fourcc(*"NV12")
-        assert fake.props[cv2.CAP_PROP_FRAME_WIDTH] == 1280
-        assert fake.props[cv2.CAP_PROP_FRAME_HEIGHT] == 720
-        assert fake.props[cv2.CAP_PROP_FPS] == 30
+        assert calls == [
+            (
+                0,
+                {
+                    "video_size": "1280x720",
+                    "framerate": "30",
+                    "pixel_format": "nv12",
+                    "rtbufsize": str(1280 * 720 * 4 * 4),
+                },
+            )
+        ]
         stats = src.stats()
         assert (stats.width, stats.height, stats.fourcc) == (8, 8, "NV12")
 
 
-def test_unknown_backend_rejected():
-    with pytest.raises(ValueError, match="backend"):
-        DeviceSource(0, backend="v4l2", opener=lambda *a: FakeCapture())
+def test_compressed_or_unknown_fourcc_rejected():
+    with pytest.raises(ValueError, match="fourcc"):
+        DeviceSource(0, fourcc="MJPG", opener=lambda *a: FakeCapture())
 
 
 def test_stats_reports_fps_over_last_second():
@@ -231,13 +243,14 @@ def test_source_is_single_use():
         src.start()
 
 
-class GetFailsCapture(FakeCapture):
-    def get(self, prop):
+class NoFourccCapture(FakeCapture):
+    @property
+    def fourcc(self):
         raise RuntimeError("driver query failed")
 
 
 def test_start_releases_device_when_setup_fails_before_reader_thread():
-    fake = GetFailsCapture()
+    fake = NoFourccCapture()
     src, _ = make_source(fake)
     with pytest.raises(RuntimeError, match="driver query failed"):
         src.start()
@@ -245,18 +258,39 @@ def test_start_releases_device_when_setup_fails_before_reader_thread():
     src.close()
 
 
-class SetFailsCapture(FakeCapture):
-    def set(self, prop, value):
-        raise RuntimeError("driver rejected the property")
+DEVICE_LOG = (
+    '"Integrated Webcam" (video)\n'
+    '  Alternative name "@device_pnp_\\\\?\\usb#vid_0c45"\n'
+    '"AVerMedia GC551 Video Capture" (audio, video)\n'
+    '  Alternative name "@device_pnp_\\\\?\\usb#vid_07ca&pid_0551"\n'
+    '"Microphone (USB Audio)" (audio)\n'
+    "Could not enumerate audio only devices (or none found).\n"
+)
 
 
-def test_start_releases_device_when_configuration_fails():
-    fake = SetFailsCapture()
-    src, _ = make_source(fake)
-    with pytest.raises(CaptureError) as exc:
-        src.start()
-    assert "index 0" in str(exc.value)
-    assert "dshow" in str(exc.value)
-    assert "driver rejected the property" in str(exc.value)
-    assert fake.released
-    src.close()
+def test_parse_device_list_keeps_video_devices_in_order():
+    assert parse_device_list(DEVICE_LOG) == [
+        "Integrated Webcam",
+        "AVerMedia GC551 Video Capture",
+    ]
+    assert parse_device_list("") == []
+
+
+# lavfi's test pattern is a synthetic source that exists on every platform.
+def test_av_capture_reads_bgr_frames_from_a_real_input():
+    cap = AvCapture("testsrc=size=64x48:rate=30", "lavfi", {})
+    try:
+        ok, first = cap.read()
+        ok2, second = cap.read()
+    finally:
+        cap.release()
+    assert ok and ok2
+    assert first.shape == (48, 64, 3)
+    assert first.dtype == np.uint8
+    assert isinstance(cap.fourcc, str)
+    assert not np.array_equal(first, second)
+
+
+def test_av_capture_open_failure_propagates():
+    with pytest.raises(Exception, match="no-such-filter"):
+        AvCapture("no-such-filter", "lavfi", {})

@@ -8,7 +8,7 @@ import cv2
 import numpy as np
 
 from autoplay.core.capture.base import CaptureError, CaptureStats
-from autoplay.core.capture.device import BACKENDS, DeviceSource
+from autoplay.core.capture.device import DeviceSource
 
 PREVIEW_SIZE = (960, 540)
 BLACK_MEAN_LUMA = 12
@@ -134,7 +134,7 @@ def _handle(args: argparse.Namespace) -> int:
     except ValueError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2
-    src = DeviceSource(index, backend=args.backend)
+    src = DeviceSource(index)
     try:
         src.start()
     except CaptureError as exc:
@@ -158,7 +158,6 @@ def register(sub) -> None:
     p.add_argument(
         "--source", default="device:0", help="frame source, device:N (default device:0)"
     )
-    p.add_argument("--backend", choices=sorted(BACKENDS), default="dshow")
     p.add_argument(
         "--labels",
         default="unlabeled",

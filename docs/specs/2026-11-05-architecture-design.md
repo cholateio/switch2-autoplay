@@ -94,7 +94,8 @@ game_packs/<game>/   按鍵對照、狀態模板、專用工具、給模型的�
 **user 決定**：Python。理由：視覺、OCR、SDK 生態；延遲預算寬鬆；精準時序已在韌體。
 
 - `capture/`：三種來源同一介面 `FrameSource.latest() -> Frame(bgr, ts, seq)`。
-  GC551 走 OpenCV 直開（DirectShow/MSMF），**未壓縮 YUY2，1080p60**；背景執行緒只保留最新一幀，不累積延遲。
+  GC551 走 PyAV（ffmpeg 的 DirectShow 輸入）以非阻塞方式讀取，**未壓縮 YUY2，1080p60**；背景執行緒只保留最新一幀，不累積延遲。
+  OpenCV 只負責影像處理，不負責讀擷取卡（2026-11-17 M0 實測決定，原因見 `docs/DEVELOPMENT.md` 的 Hardware facts）。
   顯示實際 fps、擷取延遲、全黑偵測；`s` 鍵存全解析度截圖。（重新設計，原 capture.py 已遺失。）
 - `perception/`：所有座標與模板以 **1920×1080 為基準**，實際解析度不同時自動換算。
   提供 `match_template`、`roi_color`、`frame_diff`、`ocr(roi)`（繁中，RapidOCR/PaddleOCR，GPU）。
@@ -156,7 +157,7 @@ M0–M2 是 core，M3 起才碰 Pokopia 知識。M5 之前若 Pokopia 證實不�
 
 - 序列協定的確切位元配置、CRC 多項式、重送策略。
 - Pokken 描述符與按鍵位元順序：**對照 `progmem/Switch-Fightstick/HORI_Descriptors` 驗證，不憑記憶寫**。
-- GC551 的實際開法（DirectShow vs MSMF）與 YUY2 轉 BGR 的位置（M0 量測決定）。
+- ~~GC551 的實際開法（DirectShow vs MSMF）與 YUY2 轉 BGR 的位置~~：已決定（2026-11-17）——PyAV 的 DirectShow 輸入，YUY2 轉 BGR 在讀取執行緒內完成。
 - OCR 引擎選型（RapidOCR vs PaddleOCR）與 GPU 綁定。
 - notes 記憶的格式與壓縮策略。
 - 測試框架與離線 fixture 的組織方式。

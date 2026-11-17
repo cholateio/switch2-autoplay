@@ -13,7 +13,12 @@ import numpy as np
 
 from autoplay.core import clock
 from autoplay.core.capture.base import CaptureError, FrameSource
-from autoplay.core.capture.device import DeviceSource, fourcc_str, open_capture
+from autoplay.core.capture.device import (
+    DeviceSource,
+    Opener,
+    list_devices,
+    open_capture,
+)
 from autoplay.core.tools.monitors import Monitor, format_monitors, list_monitors
 from autoplay.core.tools.pattern import (
     decode_stamp,
@@ -22,10 +27,9 @@ from autoplay.core.tools.pattern import (
     stamp_age_ms,
 )
 
-PROBE_BACKENDS = ("dshow", "msmf")
-PROBE_FOURCCS = ("YUY2", "NV12", "MJPG")
+PROBE_FOURCCS = ("YUY2", "NV12", "UYVY")
 PROBE_SECONDS = 5.0
-# Per-row limit for the child process: interpreter start, a slow MSMF open and
+# Per-row limit for the child process: interpreter start, opening the device and
 # PROBE_SECONDS of reads all fit well inside it.
 ROW_TIMEOUT_S = 40.0
 DEADLINE_EXIT_CODE = 3
@@ -176,15 +180,9 @@ def _brief(exc: Exception) -> str:
     return first if len(first) <= 80 else first[:77] + "..."
 
 
-def _time_reads(index, backend, fourcc, opener, seconds):
+def _time_reads(index, fourcc, opener, seconds):
     cap = open_capture(
-        index,
-        backend=backend,
-        width=1920,
-        height=1080,
-        fps=60,
-        fourcc=fourcc,
-        opener=opener,
+        index, width=1920, height=1080, fps=60, fourcc=fourcc, opener=opener
     )
     try:
         cap.read()
@@ -202,25 +200,19 @@ def _time_reads(index, backend, fourcc, opener, seconds):
             ends.append(t1)
             durations.append(t1 - t0)
             shape = img.shape
-        actual = fourcc_str(cap.get(cv2.CAP_PROP_FOURCC))
+        actual = cap.fourcc
     finally:
         cap.release()
     return ends, durations, shape, actual
 
 
-def _row_label(backend: str, fourcc: str) -> str:
-    return f"{backend:<7} {fourcc:<6}"
-
-
 def _probe_one(
-    index: int, backend: str, fourcc: str, opener, seconds: float
+    index: int, fourcc: str, opener: Opener | None, seconds: float
 ) -> ProbeRow:
-    label = _row_label(backend, fourcc)
+    label = f"{fourcc:<6}"
     try:
-        ends, durations, shape, actual = _time_reads(
-            index, backend, fourcc, opener, seconds
-        )
-    # One failing combination (cv2.error included) must not stop the table.
+        ends, durations, shape, actual = _time_reads(index, fourcc, opener, seconds)
+    # One failing format must not stop the table.
     except Exception as exc:  # noqa: BLE001
         return ProbeRow(f"{label} unavailable ({_brief(exc)})", False)
     if shape is None or len(ends) < 2:
@@ -236,7 +228,7 @@ def _probe_one(
     )
 
 
-def _row_command(index: int, backend: str, fourcc: str) -> list[str]:
+def _row_command(index: int, fourcc: str) -> list[str]:
     return [
         sys.executable,
         "-m",
@@ -245,7 +237,7 @@ def _row_command(index: int, backend: str, fourcc: str) -> list[str]:
         "--index",
         str(index),
         "--only",
-        f"{backend}:{fourcc}",
+        fourcc,
     ]
 
 
@@ -255,16 +247,15 @@ def _row_command(index: int, backend: str, fourcc: str) -> list[str]:
 # 0 only if it measured.
 def _spawn_row(
     index: int,
-    backend: str,
     fourcc: str,
     *,
     timeout: float = ROW_TIMEOUT_S,
     command: Sequence[str] | None = None,
 ) -> ProbeRow:
-    label = _row_label(backend, fourcc)
+    label = f"{fourcc:<6}"
     try:
         done = subprocess.run(
-            command or _row_command(index, backend, fourcc),
+            command or _row_command(index, fourcc),
             stdout=subprocess.PIPE,
             text=True,
             errors="replace",
@@ -286,17 +277,26 @@ def _spawn_row(
 
 
 def _run_table(
-    index: int, *, run_row: Callable[[int, str, str], ProbeRow] = _spawn_row
+    index: int,
+    *,
+    run_row: Callable[[int, str], ProbeRow] = _spawn_row,
+    devices: Callable[[], list[str]] = list_devices,
 ) -> int:
-    print("backend fourcc size       actual    fps  p50 ms  p99 ms  read ms")
+    try:
+        names = devices()
+    except CaptureError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    for i, name in enumerate(names):
+        print(f"device {i}: {name}")
+    print("fourcc size       actual    fps  p50 ms  p99 ms  read ms")
     measured = False
-    for backend in PROBE_BACKENDS:
-        for fourcc in PROBE_FOURCCS:
-            row = run_row(index, backend, fourcc)
-            print(row.text, flush=True)
-            measured = measured or row.measured
+    for fourcc in PROBE_FOURCCS:
+        row = run_row(index, fourcc)
+        print(row.text, flush=True)
+        measured = measured or row.measured
     if not measured:
-        print("error: no backend/format combination delivered frames", file=sys.stderr)
+        print(f"error: device {index} delivered frames in no format", file=sys.stderr)
         return 1
     return 0
 
@@ -313,23 +313,20 @@ def _arm_deadline(seconds: float) -> threading.Timer:
 
 def _run_only(
     index: int,
-    combination: str,
+    fourcc: str,
     *,
-    opener: Callable[..., "cv2.VideoCapture"] | None = None,
+    opener: Opener | None = None,
     seconds: float = PROBE_SECONDS,
     deadline: float = ROW_TIMEOUT_S,
 ) -> int:
-    backend, _, fourcc = combination.partition(":")
-    if backend not in PROBE_BACKENDS or fourcc not in PROBE_FOURCCS:
+    if fourcc not in PROBE_FOURCCS:
         print(
-            f"error: --only expects BACKEND:FOURCC with a backend from "
-            f"{', '.join(PROBE_BACKENDS)} and a format from {', '.join(PROBE_FOURCCS)}",
-            file=sys.stderr,
+            f"error: --only expects one of {', '.join(PROBE_FOURCCS)}", file=sys.stderr
         )
         return 2
     timer = _arm_deadline(deadline)
     try:
-        row = _probe_one(index, backend, fourcc, opener, seconds)
+        row = _probe_one(index, fourcc, opener, seconds)
     finally:
         timer.cancel()
     print(row.text, flush=True)
@@ -433,10 +430,10 @@ def register(sub) -> None:
         "probe",
         help="measure what a capture device delivers",
         description=(
-            "Without --loopback: open every backend x pixel format for "
-            f"{PROBE_SECONDS:.0f} s and print size, format, fps and frame timing; "
-            f"each combination runs in its own process, killed after "
-            f"{ROW_TIMEOUT_S:.0f} s. "
+            "Without --loopback: list the capture devices, then open the device "
+            f"in each uncompressed format for {PROBE_SECONDS:.0f} s and print size, "
+            "format, fps and frame timing; each format runs in its own process, "
+            f"killed after {ROW_TIMEOUT_S:.0f} s. "
             "With --loopback: show a time-stamp pattern full screen on --monitor N "
             "and measure how old captured frames are."
         ),
@@ -450,9 +447,9 @@ def register(sub) -> None:
     )
     p.add_argument(
         "--only",
-        metavar="BACKEND:FOURCC",
+        metavar="FOURCC",
         help=(
-            "measure one combination in this process, e.g. dshow:YUY2; the process "
+            "measure one format in this process, e.g. YUY2; the process "
             f"exits with code {DEADLINE_EXIT_CODE} if that takes over "
             f"{ROW_TIMEOUT_S:.0f} s"
         ),

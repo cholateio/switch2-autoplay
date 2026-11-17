@@ -11,6 +11,7 @@ dependencies = [
     "pyyaml",
     "opencv-python; sys_platform == 'win32'",
     "opencv-python-headless; sys_platform != 'win32'",
+    "av>=18.1.0",
 ]
 
 [project.scripts]
