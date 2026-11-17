@@ -41,8 +41,20 @@ if ! uv=$(command -v uv.exe); then
     fi
 fi
 
-# Smart App Control blocks unsigned console-script launchers (pytest.exe, ap.exe)
-# with os error 4551; python.exe is allowed, so route these through `python -m`.
+# uv puts its own unsigned launcher at venv\Scripts\python.exe. Smart App Control
+# has blocked that launcher (os error 4551) while still allowing the interpreter
+# it starts. A copy of the real interpreter next to pyvenv.cfg runs as the venv's
+# python, so the launcher is replaced whenever the two files differ.
+venv_dir=$(wslpath -u "$UV_PROJECT_ENVIRONMENT")
+if [[ -f "$venv_dir/pyvenv.cfg" ]]; then
+    base_dir=$(wslpath -u "$(sed -n 's/^home *= *//p' "$venv_dir/pyvenv.cfg" | tr -d '\r')")
+    if [[ -f "$base_dir/python.exe" ]] && ! cmp -s "$base_dir/python.exe" "$venv_dir/Scripts/python.exe"; then
+        cp "$base_dir"/python.exe "$base_dir"/python3*.dll "$base_dir"/vcruntime*.dll "$venv_dir/Scripts/"
+    fi
+fi
+
+# Smart App Control also blocks the unsigned console-script launchers (pytest.exe,
+# ap.exe) with os error 4551, so route these through `python -m`.
 case "${1:-}" in
     pytest) shift; set -- python -m pytest "$@" ;;
     ap) shift; set -- python -m autoplay "$@" ;;
