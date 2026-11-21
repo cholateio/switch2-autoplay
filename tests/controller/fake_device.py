@@ -39,12 +39,16 @@ class FakeDevice:
         busy_first: int = 0,
         mounted: bool = True,
         proto_ver: int = 1,
+        auto_deliver: bool = True,
     ) -> None:
         self.drop_acks = drop_acks
         self.drop_dones = drop_dones
         self.busy_first = busy_first
         self.mounted = mounted
         self.proto_ver = proto_ver
+        # False: a state's hold clock starts only when take_report() is called,
+        # as the firmware's does when the USB host takes a report.
+        self.auto_deliver = auto_deliver
         self.deaf = False
 
         self.applied: list[tuple[PadState, int]] = []
@@ -53,6 +57,7 @@ class FakeDevice:
         self.wd_trips = 0
         self.pings = 0
         self.writes = 0
+        self.written_types: list[int | None] = []
         self.releases = 0
         self.closed = False
 
@@ -79,6 +84,8 @@ class FakeDevice:
             if self.closed:
                 raise OSError("port is closed")
             self.writes += 1
+            # Frame types as written, including those a deaf device never parses.
+            self.written_types.append(data[2] if len(data) > 2 else None)
             if self.deaf or clock.now() < self._mute_until:
                 return
             for msg in self._parser.feed(data):
@@ -103,6 +110,18 @@ class FakeDevice:
     def trip_watchdog(self) -> None:
         with self._lock:
             self._trip()
+
+    def take_report(self) -> PadState:
+        """The USB host polls: return the state shown and, like the firmware,
+        start the hold clock of a state taken for the first time."""
+        with self._lock:
+            if (
+                self._queue
+                and self._queue[0]["shown"]
+                and self._queue[0]["start"] is None
+            ):
+                self._queue[0]["start"] = clock.now()
+            return self.state
 
     # Device side ----------------------------------------------------------
 
@@ -167,6 +186,7 @@ class FakeDevice:
                         "seq": msg.seq,
                         "state": state,
                         "hold_s": hold_ms / 1000,
+                        "shown": False,
                         "start": None,
                     }
                 )
@@ -199,8 +219,9 @@ class FakeDevice:
         entry = self._queue[0]
         if entry["start"] is None:
             self.state = entry["state"]
+            entry["shown"] = True
             # A console that is not polling never takes the report.
-            if self.mounted:
+            if self.mounted and self.auto_deliver:
                 entry["start"] = now
             return
         if now - entry["start"] >= max(entry["hold_s"], MIN_HOLD_S):

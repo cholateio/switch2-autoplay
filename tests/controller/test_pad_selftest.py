@@ -62,7 +62,7 @@ class FakeHid:
 
     def read(self, timeout_ms):
         time.sleep(0.004)
-        s = self.device.state
+        s = self.device.take_report()
         data = bytearray(
             int(s.buttons).to_bytes(2, "little")
             + bytes([s.hat, s.lx, s.ly, s.rx, s.ry, 0])
@@ -92,7 +92,7 @@ def selftest_on(device, hid):
 
 
 def test_selftest_passes_on_a_correct_device():
-    device = FakeDevice()
+    device = FakeDevice(auto_deliver=False)
     hid = FakeHid(device)
     failures, lines = selftest_on(device, hid)
     assert failures == 0, lines
@@ -111,7 +111,7 @@ def test_selftest_catches_a_wrong_button_bit():
             | (Button.A if b else 0)
         )
 
-    device = FakeDevice()
+    device = FakeDevice(auto_deliver=False)
     failures, lines = selftest_on(device, FakeHid(device, corrupt=swap_a_and_b))
     failed = [line for line in lines if line.startswith("FAIL")]
     assert failures == len(failed) >= 2
@@ -122,7 +122,7 @@ def test_selftest_catches_a_wrong_button_bit():
 def test_selftest_catches_a_device_that_never_releases(monkeypatch):
     # A watchdog far too slow: the stick must still be deflected when the check looks.
     monkeypatch.setattr(fake_device, "WATCHDOG_S", 5.0)
-    device = FakeDevice()
+    device = FakeDevice(auto_deliver=False)
     failures, lines = selftest_on(device, FakeHid(device))
     assert failures == 1
     assert lines[-1].startswith("FAIL  stick released")
@@ -130,7 +130,7 @@ def test_selftest_catches_a_device_that_never_releases(monkeypatch):
 
 
 def test_report_log_keeps_arrival_times():
-    device = FakeDevice()
+    device = FakeDevice(auto_deliver=False)
     log = ReportLog(FakeHid(device))
     start = time.perf_counter()
     time.sleep(0.05)

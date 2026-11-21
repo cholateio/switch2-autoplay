@@ -118,8 +118,12 @@ class SerialController(Controller):
         self._cond = threading.Condition()
         self._inbox: list[Msg] = []
         self._failure: Exception | None = None
-        # One command at a time, each waiting for its immediate reply.
-        self._tx_lock = threading.Lock()
+        # One command at a time, each waiting for its immediate reply. A
+        # release holds it from before it advances the generation until its
+        # outcome is recorded, so a state frame is either written before the
+        # release began (and the release then drops it on the device) or not
+        # written at all. Re-entrant because a release sends through _request.
+        self._tx_lock = threading.RLock()
         # Guards the four fields below; held only for a few instructions.
         self._op_lock = threading.Lock()
         self._state_count = 0
@@ -129,7 +133,8 @@ class SerialController(Controller):
         # without being shown, so only a new session clears it.
         self._desynced = False
         # Counts releases and failures. A state call may transmit only while
-        # the generation it started in is still the current one.
+        # the generation it started in is still the current one; it is read
+        # for that check with _tx_lock held.
         self._generation = 0
         self._flags = 0
         self._lease_until = 0.0
@@ -201,26 +206,27 @@ class SerialController(Controller):
     def _release_all(self) -> None:
         self._check_open()
         self._renew()
-        with self._op_lock:
-            # From here on no state call of an earlier generation transmits.
-            self._generation += 1
-            generation = self._generation
-            desynced = self._desynced
-        try:
+        with self._tx_lock:
+            with self._op_lock:
+                self._generation += 1
+                generation = self._generation
+                desynced = self._desynced
+            try:
+                if desynced:
+                    # HELLO releases everything too, and clears the device's seq memory.
+                    self._hello()
+                else:
+                    self._request(
+                        Msg(MsgType.RELEASE_ALL, self._next_seq()), (MsgType.ACK,)
+                    )
+            except ControllerError:
+                # Recorded before the lock is given up: a state call waiting
+                # for it must find the generation already changed.
+                self._fail(generation)
+                raise
             if desynced:
-                # HELLO releases everything too, and clears the device's seq memory.
-                self._hello()
-            else:
-                self._request(
-                    Msg(MsgType.RELEASE_ALL, self._next_seq()), (MsgType.ACK,)
-                )
-        except ControllerError:
-            self._fail(generation)
-            raise
-        with self._op_lock:
-            # A failure recorded after this release began is newer than it.
-            if desynced and self._generation == generation:
-                self._desynced = False
+                with self._op_lock:
+                    self._desynced = False
 
     def _fail(self, generation: int) -> None:
         """Record that a command of `generation` had an unknown outcome."""

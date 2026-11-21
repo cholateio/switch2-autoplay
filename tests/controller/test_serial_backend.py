@@ -391,3 +391,60 @@ def test_close_stops_everything_even_if_the_port_fails_during_recovery():
 
     assert device.closed
     assert not [t for t in threading.enumerate() if t.name.startswith("pad-")]
+
+
+class GatedDevice(FakeDevice):
+    """Blocks inside the write of a RELEASE_ALL frame until `gate` is set."""
+
+    def __init__(self):
+        super().__init__()
+        self.gate = threading.Event()
+        self.release_started = threading.Event()
+
+    def write(self, data: bytes) -> None:
+        if len(data) > 2 and data[2] == MsgType.RELEASE_ALL and not self.gate.is_set():
+            self.release_started.set()
+            self.gate.wait(5)
+        super().write(data)
+
+
+def test_no_state_is_written_once_a_release_has_started(connect):
+    device = GatedDevice()
+    pad = connect(device)
+    pad.hold("A")
+
+    release, release_raised = run_in_thread(pad.release_all)
+    assert device.release_started.wait(1)
+    # The release is mid-flight; a state call made now must not get in front of it.
+    state, state_raised = run_in_thread(lambda: pad.hold("B"))
+    time.sleep(0.1)
+    assert device.written_types.count(MsgType.SET_STATE) == 1
+
+    device.gate.set()
+    release.join(1)
+    state.join(1)
+    assert release_raised == []
+    # The call that began after the release runs after it, on a released device.
+    assert state_raised == []
+    assert device.applied[-1][0] == PadState(buttons=Button.B)
+
+
+def test_no_state_is_written_when_the_release_times_out(connect):
+    device = GatedDevice()
+    pad = connect(device)
+    pad.hold("A")
+
+    release, release_raised = run_in_thread(pad.release_all)
+    assert device.release_started.wait(1)
+    state, state_raised = run_in_thread(lambda: pad.hold("B"))
+    time.sleep(0.05)
+    device.deaf = True
+    device.gate.set()
+    release.join(2)
+    state.join(2)
+
+    assert isinstance(release_raised[0], ControllerTimeout)
+    assert isinstance(state_raised[0], ControllerError)
+    # Only the first hold("A") was ever written: the failed release left the
+    # device unknown, and nothing may be shown on top of that.
+    assert device.written_types.count(MsgType.SET_STATE) == 1
