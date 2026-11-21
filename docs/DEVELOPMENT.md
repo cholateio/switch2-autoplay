@@ -51,6 +51,7 @@ The installer refuses to run under the default execution policy; `-ExecutionPoli
 | `scripts/win ap probe --loopback --monitor N` | Measure how old captured frames are (PC output wired to the card) |
 | `scripts/win ap capture --labels a,b,c` | Preview the capture card and save labelled screenshots to `fixtures/screens/` |
 | `. ~/esp/esp-idf/export.sh && idf.py -C firmware build` | Build the firmware into `firmware/build/` (WSL) |
+| `make -C firmware/test_host test` | Host tests of the firmware's pure-C core (protocol parser, pad queue), built with ASan and UBSan |
 | `scripts/flash COM4` | Flash `firmware/build/` to the ESP32-S3 |
 | `scripts/flash COM4 build-demo` | Flash the demo build (see Firmware) |
 

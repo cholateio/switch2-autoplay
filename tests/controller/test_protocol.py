@@ -127,6 +127,11 @@ def test_inserted_and_deleted_byte_recovery():
     assert FrameParser().feed(encode(first) + deleted + encode(last)) == [first, last]
 
 
+def test_stray_magic_byte_directly_before_a_frame():
+    out = FrameParser().feed(b"\xa5" + PING_1 + b"\xa5" + A_FOR_80_MS)
+    assert [m.type for m in out] == [MsgType.PING, MsgType.SET_STATE]
+
+
 def test_parser_never_holds_more_than_one_frame_of_bytes():
     parser = FrameParser()
     # Only frame starts that all claim the longest payload: nothing can be decided
