@@ -2,7 +2,15 @@ import argparse
 import sys
 from importlib.metadata import version
 
-from autoplay.core.tools import capture_view, classify, pad, probe, soak, template
+from autoplay.core.tools import (
+    capture_view,
+    classify,
+    latency,
+    pad,
+    probe,
+    soak,
+    template,
+)
 
 # Each entry is a module-level `register(sub) -> None` that adds one subparser
 # and sets `func=handler`, where `handler(args) -> int` is the exit code.
@@ -13,6 +21,7 @@ _REGISTRARS = (
     soak.register,
     template.register,
     classify.register,
+    latency.register,
 )
 
 
