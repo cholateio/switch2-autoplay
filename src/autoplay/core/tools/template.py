@@ -70,7 +70,7 @@ def add_template_state(
     # An existing entry of this name keeps pointing at this path, so the old
     # picture is put back if the entry cannot be rewritten.
     previous = path.read_bytes() if path.exists() else None
-    staged = path.with_name(path.name + ".tmp")
+    staged = path.with_name(f"{path.name}.{os.getpid()}.tmp")
     staged.write_bytes(png.tobytes())
     os.replace(staged, path)
     try:

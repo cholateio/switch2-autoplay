@@ -123,6 +123,10 @@ def test_states_file_missing_template_raises_with_path(tmp_path):
         ("states:\n  - {name: a, kind: black, threshold: .inf}\n", "bad threshold"),
         ("states:\n  - {name: a, kind: black, threshold: true}\n", "bad threshold"),
         (
+            f"states:\n  - {{name: a, kind: black, threshold: {10**400}}}\n",
+            "bad threshold",
+        ),
+        (
             "states:\n  - {name: a, kind: black}\n  - {name: a, kind: black}\n",
             "already registered",
         ),

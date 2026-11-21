@@ -28,7 +28,8 @@ def check_threshold(value: object) -> float:
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         # ValueError, not TypeError: callers treat every bad threshold alike.
         raise ValueError(f"threshold must be a number, got {value!r}")  # noqa: TRY004
-    if not math.isfinite(value) or not 0 < value <= 1:
+    # Range first: isfinite() overflows on a huge integer.
+    if not 0 < value <= 1 or not math.isfinite(value):
         raise ValueError(f"threshold must be above 0 and at most 1, got {value!r}")
     return float(value)
 
@@ -161,7 +162,8 @@ def save_state_entry(path: Path, entry: dict) -> None:
     """Add `entry` to the states file at `path`, replacing the entry of the
     same name if there is one; the file is created when missing. Comments in
     an existing file are not kept. The file is replaced in one step, so a
-    failure leaves the old file whole. Raises StatesFileError if the existing
+    failure leaves the old file whole. One writer at a time: two processes
+    updating the same file can lose each other's entry. Raises StatesFileError if the existing
     file cannot be read, OSError if the new one cannot be written."""
     path = Path(path)
     entries = read_states_entries(path) if path.exists() else []
@@ -174,6 +176,6 @@ def save_state_entry(path: Path, entry: dict) -> None:
     text = yaml.safe_dump(
         {"states": kept}, sort_keys=False, default_flow_style=None, allow_unicode=True
     )
-    staged = path.with_name(path.name + ".tmp")
+    staged = path.with_name(f"{path.name}.{os.getpid()}.tmp")
     staged.write_text(text, encoding="utf-8")
     os.replace(staged, path)
