@@ -63,6 +63,8 @@ The installer refuses to run under the default execution policy; `-ExecutionPoli
 | `scripts/win ap classify --states-file fixtures/m2/states.yaml --expect-from-dirname fixtures/m2/screens/*` | Print the state each screenshot gets; with `--expect-from-dirname` the folder name is the right answer and a folder that is not a state means "no state" |
 | `scripts/win ap latency --port COM4 --button DPAD_RIGHT --undo DPAD_LEFT --n 30` | Measure the time from a button press to the first changed frame (p50/p90/max) |
 | `scripts/win --group hw ap pad --port COM4 selftest` | Check every button, the hold times and the watchdog by reading the reports back over USB (both board ports plugged into the PC) |
+| `scripts/win ap play --pack game_packs/pokopia --port COM4 --goal "…"` | Let the model pursue a goal through a game pack; F12 stops it. `--dummy` instead of `--port` records inputs without a gamepad, `--max-usd N` and `--model ID` override `config/agent.yaml`. Exit code: 0 done, 1 error, 3 emergency stop, 4 budget |
+| `uv run ap lessons list --pack game_packs/pokopia` | List the lesson drafts runs have written; `promote <slug> --chapter <name>` appends one to a guide chapter, `drop <slug>` deletes one |
 
 ## Firmware
 
@@ -125,6 +127,43 @@ Measured on 2026-11-17 on the owner's machine.
 - **PokemonAutomation's firmware was never checked on the console.** Its `.bin` was flashed and verified during M0, but Smart App Control blocks its unsigned Windows client and the owner chose to leave Smart App Control on. Our own firmware has replaced it on the board.
 - **Reference screenshots**: `ap capture` saved 24 full-resolution (1920×1080) screenshots under the gitignored `fixtures/screens/<label>/`, at least three each for `main_menu`, `in_game`, `dialog`, `dialog_choice`, `loading_black`, `move_wheel` and `workbench`. The loading screen is pure black (mean luma 0.0).
 - **Switch 2 idle behaviour**: after a few minutes without input the console dims the picture while still sending a signal; press a button before saving screenshots. Turn auto-sleep off for long runs: a sleeping console and a dead capture stream look the same from the capture side.
+
+## Game packs and the agent
+
+A game pack is a directory (`game_packs/<name>/`) with everything the core knows about one game:
+
+| File | What it is |
+|------|------------|
+| `manifest.yaml` | Name, home context, guide files, states file, and the buttons each context forbids (`"*"` = everywhere) |
+| `guide/core.md` | Sent with every model call; kept short |
+| `guide/<chapter>.md` | Read by the model on demand (`read_guide`) |
+| `states.yaml` | One state per context, in the `ap template` format |
+| `templates/` | Template images cut from screenshots. **Gitignored**: rebuild them on a new machine |
+| `knowledge/` | Source material the guide was written from |
+
+**Rebuilding the templates.** Capture each context with `scripts/win ap capture`, then for each one run `scripts/win ap template --image <shot> --name <context> --states-file game_packs/<name>/states.yaml` (the template is saved in `templates/` beside the states file) and pick a part of the picture that is fixed in that context (a button-hint bar or a menu frame, not scenery). Check with `ap classify --expect-from-dirname`. A pack whose templates are missing fails to load with a message naming the file.
+
+**The API key.** `ap play` reads `ANTHROPIC_API_KEY` from the environment, else from `.env` in the working directory (gitignored; `.env.example` is the template). The value is never printed or logged.
+
+**Memory** lives in `memory/<pack name>/` (gitignored): `notes.md` (progress notes, at most `notes_limit` characters, replaced whole) and `lessons/<slug>.md` (drafts). The model can write drafts but cannot promote them; `ap lessons promote` refuses a draft that never worked in use unless `--unverified` is given.
+
+**Forbidden buttons.** Every input goes through `InputGuard`: it reads the context from two fresh frames, refuses a button the pack forbids there, and sends the rest. A picture that matches no single context refuses every button forbidden anywhere. What it cannot cover: the few tens of milliseconds between the second frame and the gamepad acting. The loop is one thread and waits for the picture to settle after each input, so the context changes only through its own inputs; a menu the game opens by itself inside that window is not seen.
+
+**Auditing a run.** Every attempt is an `input` event in `runs/<stamp>-play/events.jsonl` with `button`, `context`, `seq` and `outcome` (`sent`, `refused` or `failed`). To count the presses of a button that were sent, over all play runs:
+
+```bash
+cat runs/*-play/events.jsonl | python3 -c "
+import json, sys
+events = [json.loads(line) for line in sys.stdin]
+for button in ('PLUS', 'MINUS', 'HOME', 'CAPTURE'):
+    sent = [e for e in events if e['kind'] == 'input' and e['button'] == button and e['outcome'] == 'sent']
+    print(button, len(sent), sorted({str(e['context']) for e in sent}))
+"
+```
+
+`model_call` events hold the four token counts, the cost in US dollars, the latency and the stop reason; `run_result` holds how the run ended.
+
+**Cost.** Prices per model are in `core/agent/budget.py`, with the date they were checked. Before each model call the budget reserves a full-length reply plus the last input grown by half, and stops the run (`reason=budget`, exit code 4) when that no longer fits. Server-side fallbacks are not used.
 
 ## M1 acceptance (2026-11-21)
 

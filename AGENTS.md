@@ -7,14 +7,15 @@ A machine that gives a model eyes (a capture card) and hands (an ESP32-S3 posing
 
 ## Stack
 
-- Language / framework: Python 3.12 (`requires-python >= 3.11`) managed by uv; numpy, OpenCV (image processing), PyAV (capture-device input), pyserial, PyYAML; ESP32-S3 firmware in C on ESP-IDF v6.1 with `esp_tinyusb`
-- Services: Anthropic Claude API for the agent loop (later milestones); nothing else
+- Language / framework: Python 3.12 (`requires-python >= 3.11`) managed by uv; numpy, OpenCV (image processing), PyAV (capture-device input), pyserial, PyYAML, anthropic (the model loop); ESP32-S3 firmware in C on ESP-IDF v6.1 with `esp_tinyusb`
+- Services: Anthropic Claude API for the agent loop (`ap play`); nothing else
 - Test: `uv run pytest`
 
 ## File layout
 
 - `src/autoplay/` — the game-agnostic core and the `ap` CLI (`autoplay.cli:main`); tool modules expose `register(sub) -> None`
-- `src/autoplay/core/` — one package per layer: `capture` (frame sources), `perception` (ROI scaling, matching, screen states), `controller` (gamepad), `actions` (`do_until`, timing), `runtime` (run log, emergency stop), `tools` (the `ap` subcommands)
+- `src/autoplay/core/` — one package per layer: `capture` (frame sources), `perception` (ROI scaling, matching, screen states), `controller` (gamepad), `actions` (`do_until`, timing), `runtime` (run log, emergency stop), `pack` (game pack loader, forbidden-button guard), `memory` (progress notes, lesson drafts), `agent` (model loop, tools, budget), `tools` (the `ap` subcommands)
+- `game_packs/<name>/` — one game's knowledge: manifest, guide, states file; its `templates/` are gitignored
 - `scripts/win` — runs a command under Windows-native Python from WSL (see `docs/DEVELOPMENT.md`)
 - `firmware/` — the ESP32-S3 gamepad firmware; `components/padcore/` is pure C with no ESP-IDF headers, `main/hid_backend.h` is the one interface a gamepad identity implements
 - `scripts/flash` — flashes a firmware build to the board from WSL
