@@ -56,6 +56,12 @@ class FrameSource(ABC):
     def stats(self) -> CaptureStats:
         """Return current source statistics."""
 
+    def ended(self) -> bool:
+        """True once the source can never deliver another frame: a file that
+        has been played to its end. A live source never ends; one that stops
+        delivering shows it as `stats().stale`."""
+        return False
+
     @abstractmethod
     def close(self) -> None:
         """Release the source; safe to call more than once."""

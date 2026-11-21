@@ -38,6 +38,10 @@ class OfflineSource(FrameSource):
         self._started = False
         self._latest: Frame | None = None
         self._count = 0
+        self._ended = False
+
+    def ended(self) -> bool:
+        return self._ended
 
     def start(self) -> None:
         if self._started:
@@ -65,6 +69,7 @@ class OfflineSource(FrameSource):
             self._rewind()
             img = self._read()
         if img is None:
+            self._ended = True
             return None
         self._latest = Frame(bgr=img, ts=self._count / self._fps, seq=self._count + 1)
         self._count += 1
