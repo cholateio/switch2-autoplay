@@ -8,6 +8,7 @@ from autoplay.core.tools import (
     latency,
     lessons_cli,
     pad,
+    play,
     probe,
     soak,
     template,
@@ -24,6 +25,7 @@ _REGISTRARS = (
     classify.register,
     latency.register,
     lessons_cli.register,
+    play.register,
 )
 
 
