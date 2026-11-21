@@ -50,6 +50,8 @@ class FakeDevice:
         # as the firmware's does when the USB host takes a report.
         self.auto_deliver = auto_deliver
         self.deaf = False
+        # True: frames still arrive and are acted on, but no reply gets back.
+        self.mute_replies = False
 
         self.applied: list[tuple[PadState, int]] = []
         self.seqs: dict[int, list[int]] = {}
@@ -126,6 +128,8 @@ class FakeDevice:
     # Device side ----------------------------------------------------------
 
     def _send(self, kind: int, seq: int, payload: bytes = b"") -> None:
+        if self.mute_replies:
+            return
         self._out.put(encode(Msg(kind, seq, payload)))
 
     def _flags(self, clear: bool) -> int:

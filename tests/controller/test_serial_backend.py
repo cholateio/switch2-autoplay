@@ -488,8 +488,10 @@ def test_heartbeat_reports_a_device_that_stopped_answering(connect):
     with pytest.raises(ControllerTimeout, match="heartbeat"):
         beat_until_error(pad, 1.0)
     # The held state is gone on the device, so the controller wants a new session.
-    with pytest.raises(ControllerError, match="release_all"):
+    states = len(device.seqs[MsgType.SET_STATE])
+    with pytest.raises(ControllerError):
         pad.hold("B")
+    assert len(device.seqs[MsgType.SET_STATE]) == states
 
     device.deaf = False
     pad.release_all()
@@ -516,3 +518,51 @@ def test_one_lost_heartbeat_reply_is_not_an_error(connect):
     device.deaf = False
     beat_until_error(pad, 0.5)
     assert device.state == PadState(buttons=Button.A)
+
+
+def test_heartbeats_stop_when_only_the_replies_are_lost(connect):
+    device = FakeDevice()
+    pad = connect(device)
+    pad.hold("A")
+    # Our frames still reach the device and would keep its watchdog fed.
+    device.mute_replies = True
+    with pytest.raises(ControllerTimeout, match="heartbeat"):
+        beat_until_error(pad, 1.0)
+    pings = device.pings
+    time.sleep(0.45)
+    assert device.pings == pings
+    assert device.wd_trips == 1
+    assert device.state == PadState()
+
+
+def test_an_outage_between_two_state_calls_is_not_papered_over(connect):
+    device = FakeDevice()
+    pad = connect(device)
+    pad.hold("A")
+    # Long enough for the device's watchdog to release A; no heartbeat() call
+    # is made, as in a loop that only sends states.
+    device.deaf = True
+    time.sleep(0.6)
+    device.deaf = False
+    assert device.state == PadState()
+
+    with pytest.raises(ControllerError):
+        pad.press("B")
+    # Sending B on top of the remembered A would have pressed A again.
+    assert all(state.buttons != Button.A | Button.B for state, _ in device.applied)
+    pad.release_all()
+    pad.press("B", ms=20)
+    assert device.applied[-2][0] == PadState(buttons=Button.B)
+
+
+def test_a_state_admitted_after_the_stop_is_not_sent(connect):
+    device = FakeDevice()
+    pad = connect(device)
+    estop = EStop(hotkey=False)
+    pad.attach_estop(estop)
+    estop.trip()
+    sent = len(device.seqs.get(MsgType.SET_STATE, []))
+    # Past the base class's own check, as a call racing the trip would be.
+    with pytest.raises(EmergencyStop):
+        pad._apply(PadState(buttons=Button.A), 16)
+    assert len(device.seqs.get(MsgType.SET_STATE, [])) == sent

@@ -5,9 +5,12 @@ import pytest
 
 from autoplay.cli import main
 from autoplay.core.capture.base import CaptureError, Frame
+from autoplay.core.controller.base import ControllerError
 from autoplay.core.controller.dummy import DummyController
 from autoplay.core.controller.types import Hat
+from autoplay.core.runtime.estop import EmergencyStop, EStop
 from autoplay.core.runtime.runlog import RunLog
+from autoplay.core.tools import soak as soak_module
 from autoplay.core.tools.soak import (
     SoakResult,
     difference,
@@ -173,3 +176,100 @@ def test_parse_buttons():
 def test_bad_arguments_are_usage_errors_before_any_device_is_opened(argv, capsys):
     assert main(["soak", "--port", "COM99", *argv]) == 2
     assert "ap soak:" in capsys.readouterr().err
+
+
+def test_a_stop_during_the_last_wait_is_not_reported_as_success(tmp_path):
+    console = FakeConsole()
+    estop = EStop(hotkey=False)
+    console.attach_estop(estop)
+    waits = []
+
+    def sleep(seconds):
+        waits.append(seconds)
+        if len(waits) == 2:  # the wait after the last press of the only cycle
+            estop.trip()
+
+    log = RunLog("soak", root=tmp_path)
+    with pytest.raises(EmergencyStop):
+        run_soak(
+            console,
+            console,
+            ["DPAD_RIGHT", "DPAD_LEFT"],
+            1,
+            log,
+            settle_s=0.4,
+            sleep=sleep,
+        )
+    log.close()
+
+
+def test_a_dead_link_during_a_wait_ends_the_run(tmp_path):
+    class LinkDies(FakeConsole):
+        def heartbeat(self):
+            raise ControllerError("no heartbeat reply")
+
+    log = RunLog("soak", root=tmp_path)
+    with pytest.raises(ControllerError):
+        run_soak(
+            LinkDies(),
+            FakeConsole(),
+            ["DPAD_RIGHT"],
+            1,
+            log,
+            settle_s=0,
+            sleep=lambda s: None,
+        )
+    log.close()
+
+
+class Closable:
+    def __init__(self, closed, name):
+        self._closed, self._name = closed, name
+
+    def start(self):
+        pass
+
+    def attach_estop(self, estop):
+        pass
+
+    def close(self):
+        self._closed.append(self._name)
+
+
+def test_everything_opened_is_closed_when_the_run_log_cannot_be_created(
+    monkeypatch, capsys
+):
+    closed = []
+
+    def no_log(name):
+        raise OSError("runs: disk full")
+
+    monkeypatch.setattr(
+        soak_module, "DeviceSource", lambda index: Closable(closed, "source")
+    )
+    monkeypatch.setattr(
+        soak_module, "SerialController", lambda port: Closable(closed, "pad")
+    )
+    monkeypatch.setattr(soak_module, "EStop", lambda: Closable(closed, "estop"))
+    monkeypatch.setattr(soak_module, "RunLog", no_log)
+
+    assert main(["soak", "--port", "COM9", "--seq", "A"]) == 1
+    assert "disk full" in capsys.readouterr().err
+    # Closed in the reverse of the order they were opened.
+    assert closed == ["estop", "pad", "source"]
+
+
+def test_the_capture_is_closed_when_the_port_cannot_be_opened(monkeypatch, capsys):
+    closed = []
+
+    def no_port(port):
+        raise ControllerError(f"cannot open serial port {port}")
+
+    monkeypatch.setattr(
+        soak_module, "DeviceSource", lambda index: Closable(closed, "source")
+    )
+    monkeypatch.setattr(soak_module, "SerialController", no_port)
+
+    assert main(["soak", "--port", "COM9", "--seq", "A"]) == 1
+    assert "cannot open serial port COM9" in capsys.readouterr().err
+    assert closed == ["source"]

@@ -26,8 +26,9 @@ _NAK_DROPPED = 4
 _READ_POLL_S = 0.05
 _JOIN_TIMEOUT_S = 1.0
 _INBOX_LIMIT = 64
-# This many heartbeats in a row without a reply span more than the firmware's
-# watchdog time, so by then the device has released everything.
+# After this many heartbeats in a row without a reply the link is treated as
+# dead and the heartbeat stops, so that the firmware's watchdog releases
+# whatever is held even if our frames still reach it.
 _MISSED_BEATS_LIMIT = 3
 # docs/protocol.md, "Duplicates and lost replies": SET_STATE seq values and all
 # other seq values come from separate ranges.
@@ -142,8 +143,9 @@ class SerialController(Controller):
         self._generation = 0
         self._flags = 0
         self._lease_until = 0.0
-        # Set by the heartbeat thread when the link is found dead; cleared by
-        # a new session.
+        # Set by the heartbeat thread when the link is found dead, and cleared
+        # by a successful release; guarded by _op_lock. While it is set the
+        # heartbeat sends nothing.
         self._link_down: ControllerError | None = None
         # `clock.now()` of the last frame written; the firmware watchdog counts from it.
         self.last_tx = 0.0
@@ -173,10 +175,8 @@ class SerialController(Controller):
         has found the link dead: whatever was held is released by now."""
         super().heartbeat()
         self._check_open()
-        down = self._link_down
-        if down is not None:
-            self._fail(self._generation)
-            raise down
+        with self._op_lock:
+            self._check_link()
         self._renew()
 
     def close(self) -> None:
@@ -198,6 +198,10 @@ class SerialController(Controller):
     def _apply(self, state: PadState, hold_ms: int) -> None:
         self._check_open()
         with self._op_lock:
+            # Checked here, where the generation is taken: a stop tripped
+            # after this point advances the generation before it releases.
+            self._check_estop()
+            self._check_link()
             if self._desynced:
                 raise ControllerError(
                     "an earlier command failed, so the device's state is unknown; "
@@ -239,10 +243,19 @@ class SerialController(Controller):
                 # for it must find the generation already changed.
                 self._fail(generation)
                 raise
-            self._link_down = None
-            if desynced:
-                with self._op_lock:
+            with self._op_lock:
+                self._link_down = None
+                if desynced:
                     self._desynced = False
+
+    def _check_link(self) -> None:
+        """With _op_lock held: if the heartbeat found the link dead, require a
+        new session and raise."""
+        if self._link_down is not None:
+            if not self._desynced:
+                self._desynced = True
+                self._generation += 1
+            raise self._link_down
 
     def _fail(self, generation: int) -> None:
         """Record that a command of `generation` had an unknown outcome."""
@@ -435,7 +448,9 @@ class SerialController(Controller):
     def _heart_loop(self) -> None:
         missed = 0
         while not self._stop.wait(self.timing.heartbeat_ms / 1000):
-            if clock.now() >= self._lease_until:
+            # Once the link is judged dead nothing more is sent from here: a
+            # PING the device still hears would keep its watchdog fed.
+            if clock.now() >= self._lease_until or self._link_down is not None:
                 missed = 0
                 continue
             try:
@@ -445,15 +460,22 @@ class SerialController(Controller):
             except ControllerTimeout:
                 missed += 1
                 if missed >= _MISSED_BEATS_LIMIT:
-                    self._link_down = ControllerTimeout(
-                        f"no heartbeat reply from {self._port_name} for "
-                        f"{missed * self.timing.heartbeat_ms} ms; the device has released everything"
+                    self._set_link_down(
+                        ControllerTimeout(
+                            f"no heartbeat reply from {self._port_name} for "
+                            f"{missed * self.timing.heartbeat_ms} ms; heartbeats have "
+                            "stopped, so the device releases by its watchdog"
+                        )
                     )
             except ControllerError as exc:
-                self._link_down = exc
+                self._set_link_down(exc)
             else:
                 missed = 0
                 self._flags = unpack_pong(reply.payload)[0]
+
+    def _set_link_down(self, error: ControllerError) -> None:
+        with self._op_lock:
+            self._link_down = error
 
     def _shutdown(self) -> None:
         self._stop.set()

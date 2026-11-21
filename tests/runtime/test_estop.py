@@ -72,6 +72,24 @@ def test_a_press_interrupted_by_the_stop_does_not_send_its_second_half():
         pad.press("A")
     assert len(pad.log) == 1
     assert pad.release_all_calls == 1
+    # The state shown just before the trip is not recorded after it.
+    assert pad.state == PadState()
+
+
+def test_a_dpad_direction_shown_just_before_the_stop_is_not_remembered():
+    estop = EStop(hotkey=False)
+
+    class TripsOnApply(DummyController):
+        def _apply(self, state, hold_ms):
+            super()._apply(state, hold_ms)
+            estop.trip()
+
+    pad = TripsOnApply()
+    pad.attach_estop(estop)
+    with pytest.raises(EmergencyStop):
+        pad.hold("DPAD_LEFT")
+    assert pad.state == PadState()
+    assert pad._dpad == []
 
 
 def test_a_call_cut_short_by_the_stop_raises_emergency_stop_not_a_link_error():

@@ -1,3 +1,4 @@
+import threading
 from abc import ABC, abstractmethod
 from dataclasses import replace
 from typing import Literal
@@ -55,6 +56,9 @@ class Controller(ABC):
         # Held D-pad directions, oldest first: of two opposite ones the later wins.
         self._dpad: list[str] = []
         self._estop: EStop | None = None
+        # `state` and `_dpad` are written by the calling thread and reset by
+        # whichever thread trips the emergency stop.
+        self._state_lock = threading.Lock()
 
     def attach_estop(self, estop: EStop) -> None:
         """Tie this controller to an emergency stop: when it trips, everything
@@ -63,8 +67,9 @@ class Controller(ABC):
         estop.add_callback(self._on_estop)
 
     def _on_estop(self) -> None:
-        self._dpad.clear()
-        self.state = PadState()
+        with self._state_lock:
+            self._dpad = []
+            self.state = PadState()
         try:
             self._release_all()
         except ControllerError:
@@ -112,8 +117,9 @@ class Controller(ABC):
     def release_all(self) -> None:
         """Release every button and centre both sticks at once."""
         self._check_estop()
-        self._dpad.clear()
-        self.state = PadState()
+        with self._state_lock:
+            self._dpad = []
+            self.state = PadState()
         self._release_all()
 
     def heartbeat(self) -> None:
@@ -127,12 +133,16 @@ class Controller(ABC):
 
     @abstractmethod
     def _apply(self, state: PadState, hold_ms: int) -> None:
-        """Show `state` for `hold_ms` and return when that time has passed."""
+        """Show `state` for `hold_ms` and return when that time has passed.
+        A backend that can be reached from several threads calls
+        `_check_estop()` at the point where it commits to sending."""
 
     @abstractmethod
     def _release_all(self) -> None: ...
 
-    def _set(self, state: PadState, hold_ms: int) -> None:
+    def _set(
+        self, state: PadState, hold_ms: int, dpad: list[str] | None = None
+    ) -> None:
         self._check_estop()
         try:
             self._apply(state, hold_ms)
@@ -142,8 +152,13 @@ class Controller(ABC):
             if self._estop is not None and self._estop.tripped.is_set():
                 raise EmergencyStop("the emergency stop was tripped") from exc
             raise
-        self._check_estop()
-        self.state = state
+        with self._state_lock:
+            # The stop is set before its reset runs under this lock, so a
+            # state shown just before a trip is never recorded after it.
+            self._check_estop()
+            self.state = state
+            if dpad is not None:
+                self._dpad = dpad
 
     @staticmethod
     def _check_ms(ms: int) -> None:
@@ -169,9 +184,11 @@ class Controller(ABC):
         latest: dict[str, str | None] = {"v": None, "h": None}
         for direction in dpad:
             latest[_DPAD_AXIS[direction]] = direction
-        self._set(replace(self.state, hat=_HATS[latest["v"], latest["h"]]), hold_ms)
-        # Recorded only once the device has shown it, like `state`.
-        self._dpad = dpad
+        # The direction list is recorded only once the device has shown the
+        # state, together with `state`.
+        self._set(
+            replace(self.state, hat=_HATS[latest["v"], latest["h"]]), hold_ms, dpad
+        )
 
     def _with_stick(self, which: str, x: int, y: int) -> PadState:
         if which == "L":

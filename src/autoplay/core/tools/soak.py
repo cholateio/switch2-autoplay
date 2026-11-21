@@ -1,4 +1,5 @@
 import argparse
+import contextlib
 import sys
 import time
 from collections.abc import Callable
@@ -116,7 +117,10 @@ def run_soak(
 ) -> SoakResult:
     """Press `buttons` in order, `cycles` times. Each press must change the
     picture, and each cycle must end on the picture it started from. Every
-    failure is counted and its two frames are saved to `log`."""
+    failure is counted and its two frames are saved to `log`.
+
+    Raises `EmergencyStop` or `ControllerError` as soon as the controller
+    reports one, also while waiting between presses."""
     step_failures = cycle_failures = 0
     for cycle in range(cycles):
         start = after = fresh_frame(source)
@@ -125,6 +129,10 @@ def run_soak(
             pad.press(button)
             sleep(settle_s)
             after = fresh_frame(source)
+            # Nothing else talks to the controller during the wait: without
+            # this a stop or a dead link in the last wait would go unseen and
+            # the run would be reported as a success.
+            pad.heartbeat()
             changed = difference(before, after, roi)
             ok = changed > change_threshold
             log.event(
@@ -159,46 +167,51 @@ def _handle(args: argparse.Namespace) -> int:
     except ValueError as exc:
         print(f"ap soak: {exc}", file=sys.stderr)
         return 2
-    source = DeviceSource(index)
-    try:
-        source.start()
-        pad = SerialController(args.port)
-    except (CaptureError, ControllerError) as exc:
-        source.close()
-        print(f"ap soak: {exc}", file=sys.stderr)
-        return 1
-    estop = EStop()
-    pad.attach_estop(estop)
-    log = RunLog("soak")
-    log.event(
-        "start", port=args.port, source=args.source, seq=buttons, cycles=args.cycles
-    )
-    print(f"ap soak: logging to {log.dir}; F12 stops", file=sys.stderr)
-    try:
-        result = run_soak(
-            pad,
-            source,
-            buttons,
-            args.cycles,
-            log,
-            settle_s=args.settle_ms / 1000,
-            change_threshold=args.change_threshold,
-            same_threshold=args.same_threshold,
-            roi=roi,
-        )
-    except EmergencyStop:
-        log.event("emergency_stop")
-        print("ap soak: emergency stop", file=sys.stderr)
-        return 3
-    except (CaptureError, ControllerError) as exc:
-        log.event("error", message=str(exc))
-        print(f"ap soak: {exc}", file=sys.stderr)
-        return 1
-    finally:
-        pad.close()
-        estop.close()
-        source.close()
-        log.close()
+    # Each resource is registered for closing as soon as it exists, so a
+    # failure while opening a later one still releases the earlier ones.
+    with contextlib.ExitStack() as stack:
+        try:
+            source = DeviceSource(index)
+            stack.callback(source.close)
+            source.start()
+            pad = SerialController(args.port)
+            stack.callback(pad.close)
+            estop = EStop()
+            stack.callback(estop.close)
+            pad.attach_estop(estop)
+            log = RunLog("soak")
+            stack.callback(log.close)
+            log.event(
+                "start",
+                port=args.port,
+                source=args.source,
+                seq=buttons,
+                cycles=args.cycles,
+            )
+        except (CaptureError, ControllerError, OSError) as exc:
+            print(f"ap soak: {exc}", file=sys.stderr)
+            return 1
+        print(f"ap soak: logging to {log.dir}; F12 stops", file=sys.stderr)
+        try:
+            result = run_soak(
+                pad,
+                source,
+                buttons,
+                args.cycles,
+                log,
+                settle_s=args.settle_ms / 1000,
+                change_threshold=args.change_threshold,
+                same_threshold=args.same_threshold,
+                roi=roi,
+            )
+        except EmergencyStop:
+            log.event("emergency_stop")
+            print("ap soak: emergency stop", file=sys.stderr)
+            return 3
+        except (CaptureError, ControllerError) as exc:
+            log.event("error", message=str(exc))
+            print(f"ap soak: {exc}", file=sys.stderr)
+            return 1
     print(result)
     return 0 if result.ok else 1
 
