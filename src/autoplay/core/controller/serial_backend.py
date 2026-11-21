@@ -231,30 +231,33 @@ class SerialController(Controller):
                 generation = self._generation
                 desynced = self._desynced
             try:
-                if desynced:
-                    # HELLO releases everything too, and clears the device's seq memory.
-                    self._hello()
-                else:
+                if not desynced:
                     self._request(
                         Msg(MsgType.RELEASE_ALL, self._next_seq()), (MsgType.ACK,)
                     )
+                    with self._op_lock:
+                        # A failure recorded while the release was under way
+                        # needs the full recovery below.
+                        desynced = self._desynced
+                        if not desynced:
+                            self._link_down = None
+                            return
+                # HELLO releases everything too, and clears the device's seq memory.
+                self._hello()
             except ControllerError:
                 # Recorded before the lock is given up: a state call waiting
                 # for it must find the generation already changed.
                 self._fail(generation)
                 raise
             with self._op_lock:
+                # Nothing can have failed since the HELLO: this thread holds
+                # the transmit lock. Whatever was recorded is older than it.
+                self._desynced = False
                 self._link_down = None
-                if desynced:
-                    self._desynced = False
 
     def _check_link(self) -> None:
-        """With _op_lock held: if the heartbeat found the link dead, require a
-        new session and raise."""
+        """With _op_lock held: raise if the heartbeat found the link dead."""
         if self._link_down is not None:
-            if not self._desynced:
-                self._desynced = True
-                self._generation += 1
             raise self._link_down
 
     def _fail(self, generation: int) -> None:
@@ -264,6 +267,8 @@ class SerialController(Controller):
                 self._desynced = True
                 # Calls already admitted must not transmit either.
                 self._generation += 1
+            # Otherwise a release or a link-down record has taken over since:
+            # each of them settles the device's state by itself.
 
     # Link -----------------------------------------------------------------
 
@@ -289,6 +294,9 @@ class SerialController(Controller):
 
     def _check_generation(self, generation: int | None) -> None:
         if generation is not None and generation != self._generation:
+            down = self._link_down
+            if down is not None:
+                raise down
             raise _Superseded("the state call was overtaken by release_all()")
 
     def _take(self, wanted: Callable[[Msg], bool], timeout_s: float) -> Msg | None:
@@ -453,6 +461,7 @@ class SerialController(Controller):
             if clock.now() >= self._lease_until or self._link_down is not None:
                 missed = 0
                 continue
+            generation = self._generation
             try:
                 reply = self._request(
                     Msg(MsgType.PING, self._next_seq()), (MsgType.PONG,), attempts=1
@@ -465,17 +474,26 @@ class SerialController(Controller):
                             f"no heartbeat reply from {self._port_name} for "
                             f"{missed * self.timing.heartbeat_ms} ms; heartbeats have "
                             "stopped, so the device releases by its watchdog"
-                        )
+                        ),
+                        generation,
                     )
             except ControllerError as exc:
-                self._set_link_down(exc)
+                self._set_link_down(exc, generation)
             else:
                 missed = 0
                 self._flags = unpack_pong(reply.payload)[0]
 
-    def _set_link_down(self, error: ControllerError) -> None:
+    def _set_link_down(self, error: ControllerError, generation: int) -> None:
+        """Record a dead link observed while `generation` was current. An
+        observation from before a release began says nothing about the link
+        after it and is dropped."""
         with self._op_lock:
+            if self._generation != generation:
+                return
             self._link_down = error
+            self._desynced = True
+            # State calls already admitted must not transmit either.
+            self._generation += 1
 
     def _shutdown(self) -> None:
         self._stop.set()

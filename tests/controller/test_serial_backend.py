@@ -566,3 +566,57 @@ def test_a_state_admitted_after_the_stop_is_not_sent(connect):
     with pytest.raises(EmergencyStop):
         pad._apply(PadState(buttons=Button.A), 16)
     assert len(device.seqs.get(MsgType.SET_STATE, [])) == sent
+
+
+def test_a_state_admitted_before_the_link_is_found_dead_does_not_transmit(connect):
+    device = FakeDevice()
+    pad = connect(device)
+    pad.hold("A")
+    generation = pad._generation
+    states = list(device.seqs[MsgType.SET_STATE])
+
+    pad._set_link_down(ControllerTimeout("no heartbeat reply"), generation)
+
+    admitted = Msg(MsgType.SET_STATE, 9, pack_set_state(PadState(buttons=Button.B), 16))
+    with pytest.raises(ControllerTimeout, match="no heartbeat reply"):
+        pad._request(admitted, (MsgType.ACK,), generation=generation)
+    assert device.seqs[MsgType.SET_STATE] == states
+
+
+def test_a_link_failure_seen_before_a_release_does_not_outlive_it(connect):
+    device = GatedDevice()
+    pad = connect(device)
+    pad.hold("A")
+    before_release = pad._generation
+
+    release, raised = run_in_thread(pad.release_all)
+    assert device.release_started.wait(1)
+    # The heartbeat thread reports, late, a failure it saw before the release.
+    pad._set_link_down(ControllerTimeout("stale"), before_release)
+    device.gate.set()
+    release.join(1)
+
+    assert raised == []
+    pad.heartbeat()
+    pad.hold("B")
+    assert device.state == PadState(buttons=Button.B)
+    assert len(device.seqs[MsgType.HELLO]) == 1
+
+
+def test_a_failure_recorded_during_a_release_gets_the_full_recovery(connect):
+    device = GatedDevice()
+    pad = connect(device)
+    pad.hold("A")
+
+    release, raised = run_in_thread(pad.release_all)
+    assert device.release_started.wait(1)
+    pad._set_link_down(ControllerTimeout("during"), pad._generation)
+    device.gate.set()
+    release.join(2)
+
+    assert raised == []
+    # The release noticed, started a new session, and left nothing pending.
+    assert len(device.seqs[MsgType.HELLO]) == 2
+    pad.heartbeat()
+    pad.hold("B")
+    assert device.state == PadState(buttons=Button.B)
