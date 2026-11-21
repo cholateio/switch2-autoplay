@@ -88,8 +88,10 @@ class SerialController(Controller):
     when calls stop, the heartbeat stops and the firmware's watchdog releases
     the gamepad.
 
-    After a `ControllerTimeout` what the device shows is unknown: call
-    `release_all()` before going on."""
+    After a command fails, what the device shows and remembers is unknown.
+    Every state call then raises `ControllerError` until `release_all()`
+    succeeds; that call starts a new session, which releases everything and
+    makes the device forget every seq it remembered."""
 
     def __init__(
         self,
@@ -112,6 +114,10 @@ class SerialController(Controller):
         self._other_count = 0
         self._flags = 0
         self._lease_until = 0.0
+        # Set when a command's outcome is unknown. Sending further states then
+        # could reuse a seq the device still remembers and be answered DONE
+        # without being shown, so only a new session clears it.
+        self._desynced = False
         # `clock.now()` of the last frame written; the firmware watchdog counts from it.
         self.last_tx = 0.0
         self._closed = False
@@ -153,19 +159,37 @@ class SerialController(Controller):
 
     def _apply(self, state: PadState, hold_ms: int) -> None:
         self._check_open()
+        if self._desynced:
+            raise ControllerError(
+                "an earlier command failed, so the device's state is unknown; "
+                "call release_all() to start a new session"
+            )
         self._renew()
         msg = Msg(
             MsgType.SET_STATE,
             self._next_seq(state_command=True),
             pack_set_state(state, hold_ms),
         )
-        if self._submit(msg).type != MsgType.DONE:
-            self._await_done(msg, hold_ms)
+        try:
+            if self._submit(msg).type != MsgType.DONE:
+                self._await_done(msg, hold_ms)
+        except ControllerError:
+            self._desynced = True
+            raise
 
     def _release_all(self) -> None:
         self._check_open()
         self._renew()
-        self._request(Msg(MsgType.RELEASE_ALL, self._next_seq()), (MsgType.ACK,))
+        if self._desynced:
+            # HELLO releases everything too, and clears the device's seq memory.
+            self._hello()
+            self._desynced = False
+            return
+        try:
+            self._request(Msg(MsgType.RELEASE_ALL, self._next_seq()), (MsgType.ACK,))
+        except ControllerError:
+            self._desynced = True
+            raise
 
     # Link -----------------------------------------------------------------
 

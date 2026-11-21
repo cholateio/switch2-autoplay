@@ -244,3 +244,62 @@ def test_a_failed_port_surfaces_as_controller_error(connect):
 def test_a_port_that_does_not_exist_is_a_controller_error():
     with pytest.raises(ControllerError, match="cannot open serial port"):
         SerialController("no-such-port-for-this-test", timing=FAST)
+
+
+def test_after_a_failed_state_nothing_is_sent_until_release_all(connect):
+    device = FakeDevice()
+    pad = connect(device)
+    pad.hold("A")
+    device.deaf = True
+    with pytest.raises(ControllerTimeout):
+        pad.hold("B")
+    writes = device.writes
+
+    with pytest.raises(ControllerError, match="release_all"):
+        pad.hold("B")
+    assert device.writes == writes
+
+    device.deaf = False
+    pad.release_all()
+    # The resynchronisation is a new session: the device forgets every seq.
+    assert len(device.seqs[MsgType.HELLO]) == 2
+    assert device.state == PadState()
+    pad.hold("B")
+    assert device.state == PadState(buttons=Button.B)
+
+
+def test_failed_states_cannot_wrap_seq_onto_a_remembered_one(connect):
+    device = FakeDevice()
+    pad = connect(device, ack_timeout_ms=1, ack_retries=1, hello_window_ms=20)
+    pad.hold("A")
+    assert device.seqs[MsgType.SET_STATE] == [0]
+
+    # A long outage in which the caller keeps retrying, as an action loop would.
+    device.deaf = True
+    # 127 failures use up seq 1..127, so the next state would get seq 0 again.
+    for _ in range(127):
+        with pytest.raises(ControllerError):
+            pad.hold("B")
+        with pytest.raises(ControllerError):
+            pad.release_all()
+    device.deaf = False
+
+    pad.release_all()
+    pad.hold("B")
+    # The device really showed B; a wrapped seq would have been answered DONE unseen.
+    assert device.applied[-1][0] == PadState(buttons=Button.B)
+    assert device.state == PadState(buttons=Button.B)
+
+
+def test_release_all_failure_also_requires_a_resync(connect):
+    device = FakeDevice()
+    pad = connect(device)
+    pad.hold("A")
+    device.deaf = True
+    with pytest.raises(ControllerTimeout):
+        pad.release_all()
+    device.deaf = False
+    with pytest.raises(ControllerError, match="release_all"):
+        pad.hold("B")
+    pad.release_all()
+    assert device.state == PadState()
