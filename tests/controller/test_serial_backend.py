@@ -471,3 +471,48 @@ def test_emergency_stop_releases_and_ends_a_long_hold(connect):
     pad.close()
     assert device.closed
     assert device.releases == 1
+
+
+def beat_until_error(pad, seconds):
+    deadline = time.monotonic() + seconds
+    while time.monotonic() < deadline:
+        pad.heartbeat()
+        time.sleep(0.02)
+
+
+def test_heartbeat_reports_a_device_that_stopped_answering(connect):
+    device = FakeDevice()
+    pad = connect(device)
+    pad.hold("A")
+    device.deaf = True
+    with pytest.raises(ControllerTimeout, match="heartbeat"):
+        beat_until_error(pad, 1.0)
+    # The held state is gone on the device, so the controller wants a new session.
+    with pytest.raises(ControllerError, match="release_all"):
+        pad.hold("B")
+
+    device.deaf = False
+    pad.release_all()
+    pad.heartbeat()
+    pad.hold("B")
+    assert device.state == PadState(buttons=Button.B)
+
+
+def test_heartbeat_reports_a_port_that_went_away(connect):
+    device = FakeDevice()
+    pad = connect(device)
+    pad.hold("A")
+    device.closed = True
+    with pytest.raises(ControllerError, match="serial port"):
+        beat_until_error(pad, 1.0)
+
+
+def test_one_lost_heartbeat_reply_is_not_an_error(connect):
+    device = FakeDevice()
+    pad = connect(device)
+    pad.hold("A")
+    device.deaf = True
+    time.sleep(0.12)
+    device.deaf = False
+    beat_until_error(pad, 0.5)
+    assert device.state == PadState(buttons=Button.A)

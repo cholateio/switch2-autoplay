@@ -20,9 +20,11 @@ REFERENCE_SIZE = (1920, 1080)
 COMPARE_SIZE = (320, 180)
 FRAME_TIMEOUT_S = 1.0
 # Mean absolute difference, on a 0-255 scale, between two pictures reduced to
-# COMPARE_SIZE grey. Calibrated on the Switch 2 HOME menu (docs/DEVELOPMENT.md).
-DEFAULT_CHANGE_THRESHOLD = 0.5
-DEFAULT_SAME_THRESHOLD = 0.3
+# COMPARE_SIZE grey. Measured on the Switch 2 HOME menu: the smallest real
+# change (the cursor moving one icon in the bottom row) is 0.33 to 0.37, and
+# the same picture taken twice differs by 0.07 to 0.11 (docs/DEVELOPMENT.md).
+DEFAULT_CHANGE_THRESHOLD = 0.2
+DEFAULT_SAME_THRESHOLD = 0.2
 
 Roi = tuple[int, int, int, int]
 
