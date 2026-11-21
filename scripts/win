@@ -3,6 +3,7 @@
 # equals `uv.exe run --project <repo UNC> --directory <repo UNC> <args...>`,
 # so relative paths (tests/, runs/, fixtures/) resolve to this single WSL checkout.
 # A leading `pytest` or `ap` is rewritten to `python -m pytest` / `python -m autoplay`.
+# `scripts/win --group hw <args...>` also installs that dependency group first.
 # scripts/win --print-env prints the resolved UV_PROJECT_ENVIRONMENT and exits.
 set -euo pipefail
 
@@ -65,6 +66,13 @@ if ! cmp -s "$base_dir/python.exe" "$venv_dir/Scripts/python.exe"; then
     cp "$base_dir"/python.exe "$base_dir"/python3*.dll "$base_dir"/vcruntime*.dll "$venv_dir/Scripts/"
 fi
 
+# Leading `--group NAME` pairs are options for `uv run`, not part of the command.
+uv_opts=()
+while [[ "${1:-}" == "--group" && $# -ge 2 ]]; do
+    uv_opts+=("$1" "$2")
+    shift 2
+done
+
 # Smart App Control also blocks the unsigned console-script launchers (pytest.exe,
 # ap.exe) with os error 4551, so route these through `python -m`.
 case "${1:-}" in
@@ -72,4 +80,4 @@ case "${1:-}" in
     ap) shift; set -- python -m autoplay "$@" ;;
 esac
 
-exec "$uv" run --project "$repo_unc" --directory "$repo_unc" "$@"
+exec "$uv" run --project "$repo_unc" --directory "$repo_unc" "${uv_opts[@]}" "$@"

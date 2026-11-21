@@ -27,6 +27,7 @@ There is one checkout, inside WSL. Both environments use it directly.
 - The venv is kept off the UNC share: the script resolves `%LOCALAPPDATA%` through `cmd.exe` and sets `UV_PROJECT_ENVIRONMENT`, appending it to `WSLENV` so it reaches `uv.exe`.
 - It finds `uv.exe` on `PATH` first, otherwise at `%USERPROFILE%\.local\bin\uv.exe`.
 - Before running, it creates the venv if it is missing (`uv venv`, which does not start the launcher) and replaces `venv\Scripts\python.exe` with a copy of the uv-managed interpreter (plus its DLLs) whenever the two differ. uv creates that file as its own unsigned launcher, and Smart App Control blocked the launcher on 2026-11-17 (`Failed to query Python interpreter … os error 4551`) although it had run on 2026-11-11; the interpreter itself has stayed allowed. A copied interpreter next to `pyvenv.cfg` runs as the venv's python, and uv accepts it.
+- Leading `--group NAME` pairs go to `uv run`: `scripts/win --group hw …` installs the `hw` dependency group (hidapi, esptool) before running.
 - A first argument of `pytest` or `ap` is rewritten to `python -m pytest` / `python -m autoplay`, because Smart App Control blocks unsigned console-script launchers with os error 4551: `pytest.exe` is blocked today, and `ap.exe` is the same unsigned launcher and can be blocked at any time. Other arguments pass through unchanged.
 - `scripts/win --print-env` prints the resolved venv path and runs nothing.
 
@@ -55,6 +56,8 @@ The installer refuses to run under the default execution policy; `-ExecutionPoli
 | `scripts/flash COM4` | Flash `firmware/build/` to the ESP32-S3 |
 | `scripts/flash COM4 build-demo` | Flash the demo build (see Firmware) |
 | `scripts/win python scripts/hello.py COM4` | Check the serial link: prints the firmware's INFO and the PING round-trip time |
+| `scripts/win ap pad --port COM4 press A` | Drive the gamepad by hand: `press`, `hold`, `stick`, `release-all`, `info`; `--port dummy` prints what would be sent |
+| `scripts/win --group hw ap pad --port COM4 selftest` | Check every button, the hold times and the watchdog by reading the reports back over USB (both board ports plugged into the PC) |
 
 ## Firmware
 
@@ -113,6 +116,7 @@ Measured on 2026-11-17 on the owner's machine.
 - **Read the port one byte first.** `port.read(n)` with a timeout waits the whole timeout unless `n` bytes arrive, and Windows rounds that wait up to a 15.6 ms tick: the same round trip measured 15.4 ms that way. `port.read(1)` followed by `port.read(port.in_waiting)` returns as soon as data is there.
 - **The first time the port is opened after flashing, the board resets** (INFO showed an uptime of 181 ms); later opens do not reset it. A host must therefore retry HELLO for a while instead of failing on the first unanswered one.
 - **A new state reaches the console 11 to 14 ms after its command** (hold 80 ms: DONE after 94 ms; hold 0: DONE after 27 ms; hold 1000 ms: DONE after 1013 ms). The firmware always has one report waiting for the console's next poll, so a new state goes out one poll after the report already waiting.
+- **`ap pad selftest` passes on the board** (2026-11-21, three runs, both ports on the PC): all 14 buttons and 8 D-pad directions read back correctly; a 0 ms press was shown 20 to 24 ms and an 80 ms press 84 to 88 ms (Windows reads the pad every 4 ms, so these are multiples of 4); with the heartbeat stopped the stick was released 304 to 307 ms after the last frame.
 - **PokemonAutomation's firmware was never checked on the console.** Its `.bin` was flashed and verified during M0, but Smart App Control blocks its unsigned Windows client and the owner chose to leave Smart App Control on. Our own firmware has replaced it on the board.
 - **Reference screenshots**: `ap capture` saved 24 full-resolution (1920×1080) screenshots under the gitignored `fixtures/screens/<label>/`, at least three each for `main_menu`, `in_game`, `dialog`, `dialog_choice`, `loading_black`, `move_wheel` and `workbench`. The loading screen is pure black (mean luma 0.0).
 - **Switch 2 idle behaviour**: after a few minutes without input the console dims the picture while still sending a signal; press a button before saving screenshots. Turn auto-sleep off for long runs: a sleeping console and a dead capture stream look the same from the capture side.
