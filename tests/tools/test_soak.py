@@ -245,7 +245,7 @@ def test_everything_opened_is_closed_when_the_run_log_cannot_be_created(
         raise OSError("runs: disk full")
 
     monkeypatch.setattr(
-        soak_module, "DeviceSource", lambda index: Closable(closed, "source")
+        soak_module, "open_source", lambda spec: Closable(closed, "source")
     )
     monkeypatch.setattr(
         soak_module, "SerialController", lambda port: Closable(closed, "pad")
@@ -266,7 +266,7 @@ def test_the_capture_is_closed_when_the_port_cannot_be_opened(monkeypatch, capsy
         raise ControllerError(f"cannot open serial port {port}")
 
     monkeypatch.setattr(
-        soak_module, "DeviceSource", lambda index: Closable(closed, "source")
+        soak_module, "open_source", lambda spec: Closable(closed, "source")
     )
     monkeypatch.setattr(soak_module, "SerialController", no_port)
 

@@ -6,12 +6,10 @@ import pytest
 
 from autoplay.cli import main
 from autoplay.core.capture.base import CaptureStats
-from autoplay.core.tools import capture_view
 from autoplay.core.tools.capture_view import (
     is_black,
     label_for_key,
     overlay_lines,
-    parse_device_source,
     parse_labels,
     screenshot_path,
 )
@@ -28,19 +26,6 @@ def test_is_black_uses_mean_not_max():
     assert not is_black(img)
     img[:4] = 0
     assert is_black(img)
-
-
-@pytest.mark.parametrize(("spec", "index"), [("device:0", 0), ("device:3", 3)])
-def test_parse_device_source(spec, index):
-    assert parse_device_source(spec) == index
-
-
-@pytest.mark.parametrize(
-    "spec", ["file:clip.mp4", "device:", "device:-1", "device:x", "0"]
-)
-def test_parse_device_source_rejects_other_forms(spec):
-    with pytest.raises(ValueError, match="device:N"):
-        parse_device_source(spec)
 
 
 def test_parse_labels():
@@ -70,14 +55,14 @@ def test_screenshot_path():
     assert path == Path("fixtures/screens/menu/20261111-090507-042.png")
 
 
-def _no_device(*args, **kwargs):
-    raise AssertionError("must not open a device")
-
-
 def test_capture_rejects_unsupported_source_without_opening(monkeypatch, capsys):
-    monkeypatch.setattr(capture_view, "DeviceSource", _no_device)
     assert main(["capture", "--source", "file:clip.mp4"]) == 2
-    assert "device:N" in capsys.readouterr().err
+    assert "device:<index>" in capsys.readouterr().err
+
+
+def test_capture_reports_a_missing_offline_source(tmp_path, capsys):
+    assert main(["capture", "--source", f"video:{tmp_path / 'none.avi'}"]) == 1
+    assert "not found" in capsys.readouterr().err
 
 
 def test_capture_help(capsys):

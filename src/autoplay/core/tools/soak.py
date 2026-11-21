@@ -9,12 +9,11 @@ import cv2
 import numpy as np
 
 from autoplay.core.capture.base import CaptureError, Frame, FrameSource
-from autoplay.core.capture.device import DeviceSource
+from autoplay.core.capture.factory import SOURCE_FORMS, open_source
 from autoplay.core.controller.base import BUTTON_NAMES, Controller, ControllerError
 from autoplay.core.controller.serial_backend import SerialController
 from autoplay.core.runtime.estop import EmergencyStop, EStop
 from autoplay.core.runtime.runlog import RunLog
-from autoplay.core.tools.capture_view import parse_device_source
 
 # Coordinates given on the command line refer to a 1920x1080 picture.
 REFERENCE_SIZE = (1920, 1080)
@@ -159,7 +158,7 @@ def run_soak(
 
 def _handle(args: argparse.Namespace) -> int:
     try:
-        index = parse_device_source(args.source)
+        source = open_source(args.source)
         buttons = parse_buttons(args.seq)
         roi = parse_roi(args.roi) if args.roi else None
         if args.cycles <= 0:
@@ -171,7 +170,6 @@ def _handle(args: argparse.Namespace) -> int:
     # failure while opening a later one still releases the earlier ones.
     with contextlib.ExitStack() as stack:
         try:
-            source = DeviceSource(index)
             stack.callback(source.close)
             source.start()
             pad = SerialController(args.port)
@@ -230,7 +228,9 @@ def register(sub) -> None:
         "--port", required=True, help="serial port of the firmware, such as COM4"
     )
     p.add_argument(
-        "--source", default="device:0", help="frame source, device:N (default device:0)"
+        "--source",
+        default="device:0",
+        help=f"frame source: {SOURCE_FORMS} (default device:0)",
     )
     p.add_argument(
         "--seq", required=True, help="comma-separated buttons pressed in each cycle"

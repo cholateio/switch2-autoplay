@@ -7,8 +7,9 @@ from pathlib import Path
 import cv2
 import numpy as np
 
-from autoplay.core.capture.base import CaptureError, CaptureStats
-from autoplay.core.capture.device import DeviceSource
+from autoplay.core import clock
+from autoplay.core.capture.base import CaptureError, CaptureStats, FrameSource
+from autoplay.core.capture.factory import SOURCE_FORMS, open_source
 
 PREVIEW_SIZE = (960, 540)
 BLACK_MEAN_LUMA = 12
@@ -16,14 +17,6 @@ SCREENS_DIR = Path("fixtures/screens")
 _LABEL_RE = re.compile(r"[A-Za-z0-9_-]+")
 _MAX_LABELS = 9
 _WINDOW = "ap capture"
-
-
-def parse_device_source(spec: str) -> int:
-    """Return N for a `device:N` source spec; raise ValueError for any other form."""
-    match = re.fullmatch(r"device:(\d+)", spec)
-    if match is None:
-        raise ValueError(f"unsupported --source {spec!r}; only device:N is supported")
-    return int(match.group(1))
 
 
 def parse_labels(text: str) -> list[str]:
@@ -96,9 +89,10 @@ def _save(bgr: np.ndarray, label: str) -> Path:
     return path
 
 
-def _preview(src: DeviceSource, labels: list[str]) -> None:
+def _preview(src: FrameSource, labels: list[str]) -> None:
     label = labels[0]
     frame = None
+    origin = None
     base = None
     black = False
     cv2.namedWindow(_WINDOW, cv2.WINDOW_AUTOSIZE)
@@ -107,6 +101,12 @@ def _preview(src: DeviceSource, labels: list[str]) -> None:
             newer = src.wait_next(frame.seq if frame else 0, 0.1)
             if newer is not None:
                 frame = newer
+                # A file is decoded as fast as it is asked for: hold each frame
+                # back until its media time. A device frame is never early.
+                origin = origin or (clock.now(), frame.ts)
+                early = (frame.ts - origin[1]) - (clock.now() - origin[0])
+                if early > 0:
+                    cv2.waitKey(max(1, round(early * 1000)))
                 base = cv2.resize(frame.bgr, PREVIEW_SIZE, interpolation=cv2.INTER_AREA)
                 black = is_black(base)
             # Redrawn on timeouts too, so fps and the STALE marker update while the stream is stopped.
@@ -129,12 +129,11 @@ def _preview(src: DeviceSource, labels: list[str]) -> None:
 
 def _handle(args: argparse.Namespace) -> int:
     try:
-        index = parse_device_source(args.source)
+        src = open_source(args.source)
         labels = parse_labels(args.labels)
     except ValueError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2
-    src = DeviceSource(index)
     try:
         src.start()
     except CaptureError as exc:
@@ -148,7 +147,7 @@ def _handle(args: argparse.Namespace) -> int:
 def register(sub) -> None:
     p = sub.add_parser(
         "capture",
-        help="preview a capture device and save labelled screenshots",
+        help="preview a frame source and save labelled screenshots",
         description=(
             "Preview at 960x540 with fps, resolution and black-screen detection. "
             "Keys: 1-9 pick a label, s saves a full-resolution PNG to "
@@ -156,7 +155,9 @@ def register(sub) -> None:
         ),
     )
     p.add_argument(
-        "--source", default="device:0", help="frame source, device:N (default device:0)"
+        "--source",
+        default="device:0",
+        help=f"frame source: {SOURCE_FORMS} (default device:0)",
     )
     p.add_argument(
         "--labels",
