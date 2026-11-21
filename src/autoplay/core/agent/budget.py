@@ -1,0 +1,108 @@
+from dataclasses import dataclass
+
+
+@dataclass(frozen=True)
+class Price:
+    """US dollars per million tokens."""
+
+    input: float
+    output: float
+    cache_read: float
+    cache_write: float
+
+
+# Checked against the published prices on 2026-11-22. `cache_write` is the
+# 5-minute rate, the only one the loop uses.
+PRICES: dict[str, Price] = {
+    "claude-opus-5-5": Price(4.0, 20.0, 0.20, 5.0),
+    "claude-sonnet-5-5": Price(2.0, 10.0, 0.10, 2.5),
+}
+
+# How much larger than the last request's input the next one is assumed to be
+# at most, when reserving for it.
+INPUT_GROWTH = 1.5
+
+
+@dataclass(frozen=True)
+class Usage:
+    """What one model call was billed for. `input_tokens` is the part of the
+    prompt neither read from nor written to the cache."""
+
+    input_tokens: int = 0
+    output_tokens: int = 0
+    cache_read_tokens: int = 0
+    cache_write_tokens: int = 0
+
+
+def _price(model: str) -> Price:
+    try:
+        return PRICES[model]
+    except KeyError:
+        raise ValueError(
+            f"no price is known for model {model!r}; known models: {', '.join(PRICES)}"
+        ) from None
+
+
+def input_cost_usd(model: str, usage: Usage) -> float:
+    price = _price(model)
+    return (
+        usage.input_tokens * price.input
+        + usage.cache_read_tokens * price.cache_read
+        + usage.cache_write_tokens * price.cache_write
+    ) / 1_000_000
+
+
+def cost_usd(model: str, usage: Usage) -> float:
+    """Raises ValueError for a model with no known price."""
+    return (
+        input_cost_usd(model, usage)
+        + usage.output_tokens * _price(model).output / 1_000_000
+    )
+
+
+class BudgetExceeded(RuntimeError):
+    """The next model call could take the run past one of its limits."""
+
+
+class Budget:
+    """The spending limits of one run. `reserve()` goes before every model
+    call and `add()` after it; as long as no call costs more than what was
+    reserved for it, `spent_usd` never passes `max_usd`."""
+
+    def __init__(
+        self, model: str, max_usd: float, max_calls: int, max_tokens: int
+    ) -> None:
+        self._output_reserve = max_tokens * _price(model).output / 1_000_000
+        self.model = model
+        self.max_usd = max_usd
+        self.max_calls = max_calls
+        self.spent_usd = 0.0
+        self.calls = 0
+        self._last_input_usd = 0.0
+
+    def worst_case_usd(self) -> float:
+        """What the next call is assumed to cost at most: a full-length reply,
+        plus the last call's input grown by INPUT_GROWTH. The first call has no
+        last input to go by, so its prompt is not covered."""
+        return self._output_reserve + self._last_input_usd * INPUT_GROWTH
+
+    def reserve(self) -> None:
+        """Raise BudgetExceeded, naming the limit, unless one more call fits."""
+        if self.calls >= self.max_calls:
+            raise BudgetExceeded(
+                f"the limit of {self.max_calls} model calls is reached"
+            )
+        worst = self.worst_case_usd()
+        if self.spent_usd + worst > self.max_usd:
+            raise BudgetExceeded(
+                f"US${self.spent_usd:.4f} spent; one more call could cost "
+                f"US${worst:.4f}, past the limit of US${self.max_usd:.2f}"
+            )
+
+    def add(self, usage: Usage) -> float:
+        """Record one finished call and return what it cost in US dollars."""
+        cost = cost_usd(self.model, usage)
+        self.spent_usd += cost
+        self.calls += 1
+        self._last_input_usd = input_cost_usd(self.model, usage)
+        return cost
