@@ -6,6 +6,7 @@ from autoplay.core.tools import (
     capture_view,
     classify,
     latency,
+    lessons_cli,
     pad,
     probe,
     soak,
@@ -22,6 +23,7 @@ _REGISTRARS = (
     template.register,
     classify.register,
     latency.register,
+    lessons_cli.register,
 )
 
 
