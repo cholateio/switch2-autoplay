@@ -22,6 +22,8 @@ class Timing:
     done_slack_ms: int
     done_queries: int
     lease_ms: int
+    settle_stable_ms: int
+    settle_timeout_ms: int
 
 
 def load_timing(path: Path | None = None) -> Timing:

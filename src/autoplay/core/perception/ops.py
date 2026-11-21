@@ -7,6 +7,7 @@ import numpy as np
 from autoplay.core.perception.geometry import BASE_H, BASE_W, ROI, crop
 
 MIN_TEMPLATE_STD = 1.0
+COMPARE_SIZE = (320, 180)
 
 
 @dataclass(frozen=True)
@@ -73,3 +74,18 @@ def is_black(bgr: np.ndarray, roi: ROI | None = None, max_mean: float = 12.0) ->
     """True when the mean luma of the area is below `max_mean`."""
     grey = cv2.cvtColor(np.ascontiguousarray(crop(bgr, roi)), cv2.COLOR_BGR2GRAY)
     return float(grey.mean()) < max_mean
+
+
+def signature(bgr: np.ndarray, roi: ROI | None = None) -> np.ndarray:
+    """Reduce a frame, or the part of it inside `roi`, to a small grey
+    picture that two frames can be compared by."""
+    small = cv2.resize(crop(bgr, roi), COMPARE_SIZE, interpolation=cv2.INTER_AREA)
+    return cv2.cvtColor(small, cv2.COLOR_BGR2GRAY).astype(np.float32)
+
+
+def picture_difference(
+    a_bgr: np.ndarray, b_bgr: np.ndarray, roi: ROI | None = None
+) -> float:
+    """Mean absolute difference, on a 0-255 scale, between two pictures
+    reduced to COMPARE_SIZE grey."""
+    return float(np.abs(signature(a_bgr, roi) - signature(b_bgr, roi)).mean())

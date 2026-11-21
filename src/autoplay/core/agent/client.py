@@ -1,0 +1,70 @@
+import anthropic
+
+from autoplay.core.agent.budget import Usage
+from autoplay.core.agent.config import AgentConfig
+from autoplay.core.agent.loop import ModelError, ModelReply, ToolCall
+
+REQUEST_TIMEOUT_S = 180.0
+
+
+class AnthropicModel:
+    """The model behind the Anthropic Messages API.
+
+    The request never sets `thinking`, `temperature` or `tool_choice`, which
+    the configured models reject or ignore, nor server-side fallbacks: a reply
+    billed across two models could not be held to the run's budget."""
+
+    def __init__(
+        self,
+        config: AgentConfig,
+        api_key: str | None = None,
+        client: anthropic.Anthropic | None = None,
+    ) -> None:
+        self._config = config
+        try:
+            self._client = client or anthropic.Anthropic(
+                api_key=api_key, timeout=REQUEST_TIMEOUT_S
+            )
+        except anthropic.AnthropicError as exc:
+            raise ModelError(f"cannot set up the model client: {exc}") from exc
+
+    def send(self, system: str, tools: list[dict], messages: list[dict]) -> ModelReply:
+        try:
+            response = self._client.messages.create(
+                model=self._config.model,
+                max_tokens=self._config.max_tokens,
+                # One breakpoint after tools and system, which never change in
+                # a run; the top-level one follows the end of the conversation.
+                system=[
+                    {
+                        "type": "text",
+                        "text": system,
+                        "cache_control": {"type": "ephemeral"},
+                    }
+                ],
+                tools=tools,
+                messages=messages,
+                output_config={"effort": self._config.effort},
+                cache_control={"type": "ephemeral"},
+            )
+        except anthropic.APIError as exc:
+            raise ModelError(f"{type(exc).__name__}: {exc}") from exc
+        usage = response.usage
+        details = response.stop_details
+        return ModelReply(
+            content=list(response.content),
+            tool_calls=[
+                ToolCall(block.id, block.name, dict(block.input))
+                for block in response.content
+                if block.type == "tool_use"
+            ],
+            text="".join(b.text for b in response.content if b.type == "text"),
+            stop_reason=response.stop_reason or "",
+            usage=Usage(
+                input_tokens=usage.input_tokens,
+                output_tokens=usage.output_tokens,
+                cache_read_tokens=usage.cache_read_input_tokens or 0,
+                cache_write_tokens=usage.cache_creation_input_tokens or 0,
+            ),
+            refusal_category=getattr(details, "category", None),
+        )

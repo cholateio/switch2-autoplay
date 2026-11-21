@@ -23,3 +23,9 @@ done_queries: 3
 # How long one call keeps the heartbeat alive. A control loop that stops
 # calling in lets the firmware watchdog release the gamepad.
 lease_ms: 2000
+
+# After an input, the picture counts as settled once consecutive frames stay
+# alike for settle_stable_ms; a picture that keeps moving is given up on
+# after settle_timeout_ms.
+settle_stable_ms: 200
+settle_timeout_ms: 2000

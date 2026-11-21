@@ -5,22 +5,18 @@ import time
 from collections.abc import Callable
 from dataclasses import dataclass
 
-import cv2
-import numpy as np
-
 from autoplay.core.capture.base import CaptureError, Frame, FrameSource
 from autoplay.core.capture.factory import SOURCE_FORMS, open_source
 from autoplay.core.controller.base import BUTTON_NAMES, Controller, ControllerError
 from autoplay.core.controller.serial_backend import SerialController
-from autoplay.core.perception.geometry import ROI, crop, parse_roi
+from autoplay.core.perception.geometry import ROI, parse_roi
+from autoplay.core.perception.ops import picture_difference
 from autoplay.core.runtime.estop import EmergencyStop, EStop
 from autoplay.core.runtime.runlog import RunLog
 
-COMPARE_SIZE = (320, 180)
 FRAME_TIMEOUT_S = 1.0
-# Mean absolute difference, on a 0-255 scale, between two pictures reduced to
-# COMPARE_SIZE grey. Measured on the Switch 2 HOME menu: the smallest real
-# change (the cursor moving one icon in the bottom row) is 0.33 to 0.37, and
+# Thresholds on `perception.ops.picture_difference`. Measured on the Switch 2
+# HOME menu: the smallest real change (the cursor moving one icon in the bottom row) is 0.33 to 0.37, and
 # the same picture taken twice differs by 0.07 to 0.11 (docs/DEVELOPMENT.md).
 DEFAULT_CHANGE_THRESHOLD = 0.2
 DEFAULT_SAME_THRESHOLD = 0.2
@@ -55,15 +51,8 @@ def parse_buttons(text: str) -> list[str]:
     return names
 
 
-def signature(bgr: np.ndarray, roi: ROI | None) -> np.ndarray:
-    """Reduce a frame, or the part of it inside `roi`, to a small grey
-    picture that two frames can be compared by."""
-    small = cv2.resize(crop(bgr, roi), COMPARE_SIZE, interpolation=cv2.INTER_AREA)
-    return cv2.cvtColor(small, cv2.COLOR_BGR2GRAY).astype(np.float32)
-
-
 def difference(a: Frame, b: Frame, roi: ROI | None) -> float:
-    return float(np.abs(signature(a.bgr, roi) - signature(b.bgr, roi)).mean())
+    return picture_difference(a.bgr, b.bgr, roi)
 
 
 def fresh_frame(source: FrameSource) -> Frame:

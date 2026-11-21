@@ -9,6 +9,7 @@ from autoplay.core.controller.base import ControllerError
 from autoplay.core.controller.dummy import DummyController
 from autoplay.core.controller.types import Hat
 from autoplay.core.perception.geometry import ROI, parse_roi
+from autoplay.core.perception.ops import signature
 from autoplay.core.runtime.estop import EmergencyStop, EStop
 from autoplay.core.runtime.runlog import RunLog
 from autoplay.core.tools import soak as soak_module
@@ -18,7 +19,6 @@ from autoplay.core.tools.soak import (
     fresh_frame,
     parse_buttons,
     run_soak,
-    signature,
 )
 
 
