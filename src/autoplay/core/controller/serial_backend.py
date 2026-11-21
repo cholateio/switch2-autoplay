@@ -231,27 +231,21 @@ class SerialController(Controller):
                 generation = self._generation
                 desynced = self._desynced
             try:
-                if not desynced:
+                if desynced:
+                    # HELLO releases everything too, and clears the device's seq memory.
+                    self._hello()
+                else:
                     self._request(
                         Msg(MsgType.RELEASE_ALL, self._next_seq()), (MsgType.ACK,)
                     )
-                    with self._op_lock:
-                        # A failure recorded while the release was under way
-                        # needs the full recovery below.
-                        desynced = self._desynced
-                        if not desynced:
-                            self._link_down = None
-                            return
-                # HELLO releases everything too, and clears the device's seq memory.
-                self._hello()
             except ControllerError:
                 # Recorded before the lock is given up: a state call waiting
                 # for it must find the generation already changed.
                 self._fail(generation)
                 raise
             with self._op_lock:
-                # Nothing can have failed since the HELLO: this thread holds
-                # the transmit lock. Whatever was recorded is older than it.
+                # Every record of a failure needs the transmit lock or this
+                # release's generation, so none was made since it began.
                 self._desynced = False
                 self._link_down = None
 
@@ -461,33 +455,39 @@ class SerialController(Controller):
             if clock.now() >= self._lease_until or self._link_down is not None:
                 missed = 0
                 continue
-            generation = self._generation
-            try:
-                reply = self._request(
-                    Msg(MsgType.PING, self._next_seq()), (MsgType.PONG,), attempts=1
-                )
-            except ControllerTimeout:
-                missed += 1
-                if missed >= _MISSED_BEATS_LIMIT:
-                    self._set_link_down(
-                        ControllerTimeout(
-                            f"no heartbeat reply from {self._port_name} for "
-                            f"{missed * self.timing.heartbeat_ms} ms; heartbeats have "
-                            "stopped, so the device releases by its watchdog"
-                        ),
-                        generation,
+            # One hold of the transmit lock from reading the generation to
+            # recording a failure: no state frame is written in between.
+            with self._tx_lock:
+                generation = self._generation
+                try:
+                    reply = self._request(
+                        Msg(MsgType.PING, self._next_seq()), (MsgType.PONG,), attempts=1
                     )
-            except ControllerError as exc:
-                self._set_link_down(exc, generation)
-            else:
-                missed = 0
-                self._flags = unpack_pong(reply.payload)[0]
+                except ControllerTimeout:
+                    missed += 1
+                    if missed >= _MISSED_BEATS_LIMIT:
+                        self._set_link_down(
+                            ControllerTimeout(
+                                f"no heartbeat reply from {self._port_name} for "
+                                f"{missed * self.timing.heartbeat_ms} ms; heartbeats have "
+                                "stopped, so the device releases by its watchdog"
+                            ),
+                            generation,
+                        )
+                except ControllerError as exc:
+                    self._set_link_down(exc, generation)
+                else:
+                    missed = 0
+                    self._flags = unpack_pong(reply.payload)[0]
 
     def _set_link_down(self, error: ControllerError, generation: int) -> None:
         """Record a dead link observed while `generation` was current. An
         observation from before a release began says nothing about the link
         after it and is dropped."""
-        with self._op_lock:
+        # The transmit lock first, as everywhere: a state call that has
+        # checked its generation finishes its write before this is recorded,
+        # and none checks it in between.
+        with self._tx_lock, self._op_lock:
             if self._generation != generation:
                 return
             self._link_down = error

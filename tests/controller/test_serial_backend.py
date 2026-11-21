@@ -592,31 +592,66 @@ def test_a_link_failure_seen_before_a_release_does_not_outlive_it(connect):
     release, raised = run_in_thread(pad.release_all)
     assert device.release_started.wait(1)
     # The heartbeat thread reports, late, a failure it saw before the release.
-    pad._set_link_down(ControllerTimeout("stale"), before_release)
+    # It has to wait for the release, and is then out of date.
+    recorder, _ = run_in_thread(
+        lambda: pad._set_link_down(ControllerTimeout("stale"), before_release)
+    )
+    recorder.join(0.1)
+    assert recorder.is_alive()
     device.gate.set()
     release.join(1)
+    recorder.join(1)
 
     assert raised == []
+    assert pad._link_down is None
     pad.heartbeat()
     pad.hold("B")
     assert device.state == PadState(buttons=Button.B)
     assert len(device.seqs[MsgType.HELLO]) == 1
 
 
-def test_a_failure_recorded_during_a_release_gets_the_full_recovery(connect):
-    device = GatedDevice()
+class GatedStateDevice(FakeDevice):
+    """Blocks inside the write of a SET_STATE frame while `hold_states` is set."""
+
+    def __init__(self):
+        super().__init__()
+        self.hold_states = threading.Event()
+        self.gate = threading.Event()
+        self.state_write_started = threading.Event()
+
+    def write(self, data: bytes) -> None:
+        if len(data) > 2 and data[2] == MsgType.SET_STATE and self.hold_states.is_set():
+            self.state_write_started.set()
+            self.gate.wait(5)
+        super().write(data)
+
+
+def test_recording_a_dead_link_waits_for_a_state_write_in_progress(connect):
+    device = GatedStateDevice()
     pad = connect(device)
-    pad.hold("A")
+    generation = pad._generation
+    device.hold_states.set()
 
-    release, raised = run_in_thread(pad.release_all)
-    assert device.release_started.wait(1)
-    pad._set_link_down(ControllerTimeout("during"), pad._generation)
+    # The state call has passed its generation check and is inside write().
+    state, state_raised = run_in_thread(lambda: pad.hold("A"))
+    assert device.state_write_started.wait(1)
+    recorder, _ = run_in_thread(
+        lambda: pad._set_link_down(ControllerTimeout("no heartbeat reply"), generation)
+    )
+    recorder.join(0.2)
+    # Not recorded yet: the frame being written belongs before it.
+    assert recorder.is_alive()
+    assert pad._link_down is None
+
+    device.hold_states.clear()
     device.gate.set()
-    release.join(2)
-
-    assert raised == []
-    # The release noticed, started a new session, and left nothing pending.
-    assert len(device.seqs[MsgType.HELLO]) == 2
-    pad.heartbeat()
-    pad.hold("B")
-    assert device.state == PadState(buttons=Button.B)
+    recorder.join(1)
+    state.join(1)
+    assert not recorder.is_alive()
+    assert pad._link_down is not None
+    # From here on nothing more is written for a state.
+    states = list(device.seqs[MsgType.SET_STATE])
+    with pytest.raises(ControllerError):
+        pad.hold("B")
+    assert device.seqs[MsgType.SET_STATE] == states
+    assert len(state_raised) <= 1
