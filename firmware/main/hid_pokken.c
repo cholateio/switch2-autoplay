@@ -2,8 +2,6 @@
 // accepts with no handshake. Descriptor values follow progmem/Switch-Fightstick
 // (Descriptors.c) and were compared byte for byte with GP2040-CE
 // (SwitchDescriptors.h); the endpoint interval is the original pad's 5 ms.
-#include <string.h>
-
 #include "class/hid/hid_device.h"
 #include "freertos/FreeRTOS.h"
 #include "hid_backend.h"
@@ -103,8 +101,14 @@ _Static_assert(sizeof(s_config_desc) == CONFIG_TOTAL_LEN, "wTotalLength must mat
 static const char s_lang_id[] = {0x09, 0x04};
 static const char *s_strings[] = {s_lang_id, "HORI CO.,LTD.", "POKKEN CONTROLLER"};
 
+// TinyUSB frees the IN endpoint before it runs the completion callback, and
+// the callback's buffer is the one the next send writes into. So this file
+// keeps its own copy of the report in flight and refuses a new one until the
+// callback has taken that copy.
 static portMUX_TYPE s_lock = portMUX_INITIALIZER_UNLOCKED;
-static uint8_t s_last_report[REPORT_LEN] = {0, 0, 8, 128, 128, 128, 128, 0};
+static bool s_in_flight;
+static pad_state_t s_in_flight_state;
+static pad_state_t s_last_sent = PAD_STATE_NEUTRAL;
 static void (*s_delivered_cb)(const pad_state_t *delivered);
 
 static void encode_report(const pad_state_t *s, uint8_t out[REPORT_LEN])
@@ -119,21 +123,26 @@ static void encode_report(const pad_state_t *s, uint8_t out[REPORT_LEN])
     out[7] = 0;
 }
 
-static pad_state_t decode_report(const uint8_t in[REPORT_LEN])
+static void clear_in_flight(void)
 {
-    return (pad_state_t){
-        .buttons = (uint16_t)(in[0] | (in[1] << 8)),
-        .hat = in[2],
-        .lx = in[3],
-        .ly = in[4],
-        .rx = in[5],
-        .ry = in[6],
-    };
+    portENTER_CRITICAL(&s_lock);
+    s_in_flight = false;
+    portEXIT_CRITICAL(&s_lock);
+}
+
+// A bus reset or an unplug cancels the transfer in flight without a
+// completion callback; both end in one of these two events.
+static void on_usb_event(tinyusb_event_t *event, void *arg)
+{
+    (void)arg;
+    if (event->id == TINYUSB_EVENT_ATTACHED || event->id == TINYUSB_EVENT_DETACHED) {
+        clear_in_flight();
+    }
 }
 
 esp_err_t hid_backend_init(void)
 {
-    tinyusb_config_t cfg = TINYUSB_DEFAULT_CONFIG();
+    tinyusb_config_t cfg = TINYUSB_DEFAULT_CONFIG(on_usb_event);
     cfg.descriptor.device = &s_device_desc;
     cfg.descriptor.full_speed_config = s_config_desc;
     cfg.descriptor.string = s_strings;
@@ -143,7 +152,10 @@ esp_err_t hid_backend_init(void)
 
 bool hid_backend_ready(void)
 {
-    return tud_hid_ready();
+    portENTER_CRITICAL(&s_lock);
+    bool in_flight = s_in_flight;
+    portEXIT_CRITICAL(&s_lock);
+    return !in_flight && tud_hid_ready();
 }
 
 bool hid_backend_send(const pad_state_t *s)
@@ -151,13 +163,25 @@ bool hid_backend_send(const pad_state_t *s)
     if (!tud_hid_ready()) {
         return false;
     }
+    portENTER_CRITICAL(&s_lock);
+    bool taken = !s_in_flight;
+    if (taken) {
+        s_in_flight = true;
+        s_in_flight_state = *s;
+    }
+    portEXIT_CRITICAL(&s_lock);
+    if (!taken) {
+        return false;
+    }
+
     uint8_t report[REPORT_LEN];
     encode_report(s, report);
     if (!tud_hid_report(0, report, sizeof(report))) {
+        clear_in_flight();
         return false;
     }
     portENTER_CRITICAL(&s_lock);
-    memcpy(s_last_report, report, sizeof(report));
+    s_last_sent = *s;
     portEXIT_CRITICAL(&s_lock);
     return true;
 }
@@ -187,8 +211,9 @@ uint16_t tud_hid_get_report_cb(uint8_t instance, uint8_t report_id, hid_report_t
         return 0;
     }
     portENTER_CRITICAL(&s_lock);
-    memcpy(buffer, s_last_report, REPORT_LEN);
+    pad_state_t last = s_last_sent;
     portEXIT_CRITICAL(&s_lock);
+    encode_report(&last, buffer);
     return REPORT_LEN;
 }
 
@@ -202,14 +227,27 @@ void tud_hid_set_report_cb(uint8_t instance, uint8_t report_id, hid_report_type_
     (void)bufsize;
 }
 
-// The bytes passed here are the report the host has just taken, so the state
-// is decoded from them rather than remembered from the send call.
 void tud_hid_report_complete_cb(uint8_t instance, uint8_t const *report, uint16_t len)
 {
     (void)instance;
-    if (len != REPORT_LEN || s_delivered_cb == NULL) {
-        return;
+    (void)report;
+    portENTER_CRITICAL(&s_lock);
+    bool was_in_flight = s_in_flight;
+    pad_state_t delivered = s_in_flight_state;
+    s_in_flight = false;
+    portEXIT_CRITICAL(&s_lock);
+    if (was_in_flight && len == REPORT_LEN && s_delivered_cb != NULL) {
+        s_delivered_cb(&delivered);
     }
-    pad_state_t delivered = decode_report(report);
-    s_delivered_cb(&delivered);
+}
+
+void tud_hid_report_failed_cb(uint8_t instance, hid_report_type_t report_type, uint8_t const *report,
+                              uint16_t xferred_bytes)
+{
+    (void)instance;
+    (void)report;
+    (void)xferred_bytes;
+    if (report_type == HID_REPORT_TYPE_INPUT) {
+        clear_in_flight();
+    }
 }
