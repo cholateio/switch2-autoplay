@@ -19,7 +19,7 @@ ap = "autoplay.cli:main"
 
 [dependency-groups]
 dev = ["pytest", "ruff"]
-hw = ["hidapi"]
+hw = ["hidapi", "esptool"]
 
 [build-system]
 requires = ["hatchling"]

@@ -7,7 +7,7 @@ A machine that gives a model eyes (a capture card) and hands (an ESP32-S3 posing
 
 ## Stack
 
-- Language / framework: Python 3.12 (`requires-python >= 3.11`) managed by uv; numpy, OpenCV (image processing), PyAV (capture-device input), pyserial, PyYAML; ESP32-S3 firmware later
+- Language / framework: Python 3.12 (`requires-python >= 3.11`) managed by uv; numpy, OpenCV (image processing), PyAV (capture-device input), pyserial, PyYAML; ESP32-S3 firmware in C on ESP-IDF v6.1 with `esp_tinyusb`
 - Services: Anthropic Claude API for the agent loop (later milestones); nothing else
 - Test: `uv run pytest`
 
@@ -15,6 +15,8 @@ A machine that gives a model eyes (a capture card) and hands (an ESP32-S3 posing
 
 - `src/autoplay/` — the game-agnostic core and the `ap` CLI (`autoplay.cli:main`); tool modules expose `register(sub) -> None`
 - `scripts/win` — runs a command under Windows-native Python from WSL (see `docs/DEVELOPMENT.md`)
+- `firmware/` — the ESP32-S3 gamepad firmware; `components/padcore/` is pure C with no ESP-IDF headers, `main/hid_backend.h` is the one interface a gamepad identity implements
+- `scripts/flash` — flashes a firmware build to the board from WSL
 - `docs/specs/` — requirement specs; the authority for what to build
 - `docs/research/` — research notes the specs cite
 - `tests/` — pure-logic tests that run in WSL; they use only programmatically generated synthetic frames

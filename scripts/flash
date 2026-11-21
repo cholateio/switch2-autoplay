@@ -1,0 +1,34 @@
+#!/usr/bin/env bash
+# Flash a built firmware to the ESP32-S3 from WSL: scripts/flash <COMx> [build-dir]
+# build-dir is a directory under firmware/ (default: build). esptool runs under
+# Windows-native Python, where the serial port lives. The offsets, files and
+# flash settings come from the build's flasher_args.json.
+set -euo pipefail
+
+port=${1:?usage: scripts/flash <COMx> [build-dir]}
+repo_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)
+build_rel=firmware/${2:-build}
+args_json="$repo_dir/$build_rel/flasher_args.json"
+
+if [[ ! -f "$args_json" ]]; then
+    echo "scripts/flash: $args_json not found; build the firmware first (docs/DEVELOPMENT.md)" >&2
+    exit 1
+fi
+
+# One argument per line: the write-flash options, then offset/file pairs with
+# paths relative to the repo root, which is the working directory scripts/win sets.
+mapfile -t flash_args < <(python3 - "$args_json" "$build_rel" <<'PY'
+import json
+import sys
+
+args = json.load(open(sys.argv[1]))
+print("\n".join(args["write_flash_args"]))
+for offset, name in sorted(args["flash_files"].items(), key=lambda kv: int(kv[0], 16)):
+    print(offset)
+    print(f"{sys.argv[2]}/{name}")
+PY
+)
+
+# 460800 is the rate measured to work through this board's CH343 bridge.
+exec "$repo_dir/scripts/win" --group hw python -m esptool \
+    --chip esp32s3 --port "$port" --baud 460800 write-flash "${flash_args[@]}"

@@ -1,0 +1,10 @@
+menu "Pad firmware"
+
+    config PADFW_DEMO
+        bool "Demo mode: press D-pad right once per second"
+        default n
+        help
+            Ignores the serial link and presses D-pad right for 80 ms every
+            second. Used to check that a console accepts the gamepad identity.
+
+endmenu
