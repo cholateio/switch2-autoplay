@@ -52,7 +52,10 @@ def crop(bgr: np.ndarray, roi: ROI | None) -> np.ndarray:
         return bgr
     height, width = bgr.shape[:2]
     sx, sy = width / BASE_W, height / BASE_H
-    x0, x1 = round(roi.x * sx), round((roi.x + roi.w) * sx)
-    y0, y1 = round(roi.y * sy), round((roi.y + roi.h) * sy)
-    # A very small frame must still give at least one pixel.
-    return bgr[y0 : max(y1, y0 + 1), x0 : max(x1, x0 + 1)]
+    # On a small frame a box at the right or bottom edge can round to the
+    # frame's own size; it must still give at least one pixel.
+    x0 = min(round(roi.x * sx), width - 1)
+    y0 = min(round(roi.y * sy), height - 1)
+    x1 = min(max(round((roi.x + roi.w) * sx), x0 + 1), width)
+    y1 = min(max(round((roi.y + roi.h) * sy), y0 + 1), height)
+    return bgr[y0:y1, x0:x1]

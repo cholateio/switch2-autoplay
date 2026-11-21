@@ -51,6 +51,7 @@ The installer refuses to run under the default execution policy; `-ExecutionPoli
 | `scripts/win ap probe` | List capture devices and measure size, format and frame rate |
 | `scripts/win ap probe --loopback --monitor N` | Measure how old captured frames are (PC output wired to the card) |
 | `scripts/win ap capture --labels a,b,c` | Preview the capture card and save labelled screenshots to `fixtures/screens/` |
+| `scripts/win ap capture --source video:clip.mp4` | Preview a recorded source instead: `video:<path>` or `dir:<folder of images>` |
 | `. ~/esp/esp-idf/export.sh && idf.py -C firmware build` | Build the firmware into `firmware/build/` (WSL) |
 | `make -C firmware/test_host test` | Host tests of the firmware's pure-C core (protocol parser, pad queue), built with ASan and UBSan |
 | `scripts/flash COM4` | Flash `firmware/build/` to the ESP32-S3 |
@@ -58,6 +59,9 @@ The installer refuses to run under the default execution policy; `-ExecutionPoli
 | `scripts/win python scripts/hello.py COM4` | Check the serial link: prints the firmware's INFO and the PING round-trip time |
 | `scripts/win ap pad --port COM4 press A` | Drive the gamepad by hand: `press`, `hold`, `stick`, `release-all`, `info`; `--port dummy` prints what would be sent |
 | `scripts/win ap soak --port COM4 --seq DPAD_RIGHT,DPAD_LEFT --cycles 100` | Press a sequence many times and check on the capture that every press changed the picture and every cycle returned to its start; failures are saved under `runs/` |
+| `scripts/win ap template --image shot.png --name STATE --states-file fixtures/m2/states.yaml` | Cut a template out of a screenshot (drag a box, or pass `--roi x,y,w,h`) and add the state to a states file; `--kind black` adds a black-screen state |
+| `scripts/win ap classify --states-file fixtures/m2/states.yaml --expect-from-dirname fixtures/m2/screens/*` | Print the state each screenshot gets; with `--expect-from-dirname` the folder name is the right answer and a folder that is not a state means "no state" |
+| `scripts/win ap latency --port COM4 --button DPAD_RIGHT --undo DPAD_LEFT --n 30` | Measure the time from a button press to the first changed frame (p50/p90/max) |
 | `scripts/win --group hw ap pad --port COM4 selftest` | Check every button, the hold times and the watchdog by reading the reports back over USB (both board ports plugged into the PC) |
 
 ## Firmware
@@ -145,6 +149,10 @@ The four hold checks ran in the game, where a held stick keeps the picture movin
 - **The pad becomes player 1.** While it is plugged into the dock, a single-player game listens to it and ignores the Joy-Con. To play by hand, unplug the OTG cable from the dock.
 - **The first press after the console wakes only registers the pad.** The HOME menu shows the controller icon and the cursor does not move; presses after that work. Send one throw-away press before an automated run.
 - **Never press A on the HOME menu without checking where the cursor is.** The bottom row holds Nintendo Switch Online and the eShop, which this project does not touch; take a screenshot and read the label first.
+
+- **`do_until` needs `heartbeat=pad.heartbeat`.** It can wait for seconds without touching the controller; without the heartbeat a held button is released after `lease_ms` and an emergency stop is not noticed until the next action.
+- **A template must have detail.** OpenCV scores a flat-colour template 1.0 everywhere, so `ap template` and the states loader refuse one.
+- **`fixtures/screens/` is labelled loosely** (its `main_menu` holds the HOME menu, the title screen, the pause menu and the bag). `fixtures/m2/screens/` holds copies regrouped by what each picture shows; `fixtures/m2/states.yaml` is the states file checked against it. Both are local only.
 
 - Windows Smart App Control is on. Any other venv launcher you call through `scripts/win` (e.g. `numpy-config`) may fail with `Failed to spawn: … (os error 4551)`; call it as `scripts/win python -m <module>` instead. Blocks are logged as Code Integrity event 3077 in `Microsoft-Windows-CodeIntegrity/Operational`.
 - `scripts/win` runs from the repo root, not your current directory.

@@ -40,6 +40,12 @@ def test_a_state_at_exactly_its_threshold_counts():
     assert registry.classify(BLACK) == "edge"
 
 
+@pytest.mark.parametrize("threshold", [0, -0.1, 1.01, float("nan"), True, "0.8"])
+def test_register_refuses_a_threshold_outside_zero_to_one(threshold):
+    with pytest.raises(ValueError, match="threshold"):
+        StateRegistry().register("a", _const(1.0), threshold=threshold)
+
+
 def test_registering_a_name_twice_is_an_error():
     registry = StateRegistry()
     registry.register("a", _const(1.0))
@@ -110,6 +116,12 @@ def test_states_file_missing_template_raises_with_path(tmp_path):
         ("states:\n  - {name: a, kind: black, roi: [1, 2, 3]}\n", "bad roi"),
         ("states:\n  - {name: a, kind: black, roi: [0, 0, 5000, 10]}\n", "bad roi"),
         ("states:\n  - {name: a, kind: black, threshold: high}\n", "bad threshold"),
+        ("states:\n  - {name: a, kind: black, threshold: -1}\n", "bad threshold"),
+        ("states:\n  - {name: a, kind: black, threshold: 0}\n", "bad threshold"),
+        ("states:\n  - {name: a, kind: black, threshold: 1.5}\n", "bad threshold"),
+        ("states:\n  - {name: a, kind: black, threshold: .nan}\n", "bad threshold"),
+        ("states:\n  - {name: a, kind: black, threshold: .inf}\n", "bad threshold"),
+        ("states:\n  - {name: a, kind: black, threshold: true}\n", "bad threshold"),
         (
             "states:\n  - {name: a, kind: black}\n  - {name: a, kind: black}\n",
             "already registered",

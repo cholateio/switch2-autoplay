@@ -14,6 +14,7 @@ A machine that gives a model eyes (a capture card) and hands (an ESP32-S3 posing
 ## File layout
 
 - `src/autoplay/` — the game-agnostic core and the `ap` CLI (`autoplay.cli:main`); tool modules expose `register(sub) -> None`
+- `src/autoplay/core/` — one package per layer: `capture` (frame sources), `perception` (ROI scaling, matching, screen states), `controller` (gamepad), `actions` (`do_until`, timing), `runtime` (run log, emergency stop), `tools` (the `ap` subcommands)
 - `scripts/win` — runs a command under Windows-native Python from WSL (see `docs/DEVELOPMENT.md`)
 - `firmware/` — the ESP32-S3 gamepad firmware; `components/padcore/` is pure C with no ESP-IDF headers, `main/hid_backend.h` is the one interface a gamepad identity implements
 - `scripts/flash` — flashes a firmware build to the board from WSL

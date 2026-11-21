@@ -1,4 +1,5 @@
 import argparse
+import os
 import re
 import sys
 from pathlib import Path
@@ -13,6 +14,7 @@ from autoplay.core.perception.ops import check_template
 from autoplay.core.perception.states import (
     DEFAULT_THRESHOLD,
     StatesFileError,
+    read_states_entries,
     save_state_entry,
 )
 
@@ -53,26 +55,41 @@ def add_template_state(
     """Cut `box` (base coordinates) out of the picture, save it as
     `templates/<name>.png` beside the states file and add or replace the
     state's entry. Returns the template's path. Raises ValueError if the box
-    holds only a flat colour."""
+    holds only a flat colour. If the states file cannot be read or written,
+    a template that already existed under this name is left as it was."""
     base = to_base(image_bgr)
     template = base[box.y : box.y + box.h, box.x : box.x + box.w]
     check_template(template)
+    if states_file.exists():
+        read_states_entries(states_file)
     path = states_file.parent / "templates" / f"{name}.png"
     path.parent.mkdir(parents=True, exist_ok=True)
     ok, png = cv2.imencode(".png", template)
     if not ok:
         raise OSError(f"PNG encoding failed for {path}")
-    path.write_bytes(png.tobytes())
-    save_state_entry(
-        states_file,
-        {
-            "name": name,
-            "kind": "template",
-            "template": f"templates/{name}.png",
-            "roi": search_area(box, margin).as_list(),
-            "threshold": threshold,
-        },
-    )
+    # An existing entry of this name keeps pointing at this path, so the old
+    # picture is put back if the entry cannot be rewritten.
+    previous = path.read_bytes() if path.exists() else None
+    staged = path.with_name(path.name + ".tmp")
+    staged.write_bytes(png.tobytes())
+    os.replace(staged, path)
+    try:
+        save_state_entry(
+            states_file,
+            {
+                "name": name,
+                "kind": "template",
+                "template": f"templates/{name}.png",
+                "roi": search_area(box, margin).as_list(),
+                "threshold": threshold,
+            },
+        )
+    except BaseException:
+        if previous is None:
+            path.unlink(missing_ok=True)
+        else:
+            path.write_bytes(previous)
+        raise
     return path
 
 

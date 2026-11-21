@@ -186,6 +186,8 @@ def test_result_text():
         ["--button", "A", "--undo", "B", "--roi", "1,2,3"],
         ["--button", "A", "--undo", "B", "--source", "file:x.mp4"],
         ["--button", "A", "--undo", "B", "--n", "0"],
+        ["--button", "A", "--undo", "B", "--source", "video:clip.avi"],
+        ["--button", "A", "--undo", "B", "--source", "dir:frames"],
     ],
 )
 def test_bad_arguments_are_usage_errors_before_any_device_is_opened(argv, capsys):
@@ -206,6 +208,7 @@ def test_the_capture_is_closed_when_the_port_cannot_be_opened(monkeypatch, capsy
     def no_port(port):
         raise ControllerError(f"cannot open serial port {port}")
 
+    monkeypatch.setattr(latency_module, "DeviceSource", Source)
     monkeypatch.setattr(latency_module, "open_source", lambda spec: Source())
     monkeypatch.setattr(latency_module, "SerialController", no_port)
     args = ["latency", "--port", "COM9", "--button", "A", "--undo", "B"]

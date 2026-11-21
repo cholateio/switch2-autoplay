@@ -6,6 +6,7 @@ import yaml
 from autoplay.cli import main
 from autoplay.core.perception.geometry import ROI
 from autoplay.core.perception.states import load_states_file
+from autoplay.core.tools import template as template_module
 from autoplay.core.tools.template import search_area
 
 BOX = (700, 420, 160, 120)
@@ -99,6 +100,39 @@ def test_template_tool_adds_a_black_state_without_an_image(tmp_path):
     assert main([*args, "--states-file", str(tmp_path / "states.yaml")]) == 0
     registry = load_states_file(tmp_path / "states.yaml")
     assert registry.classify(np.zeros((1080, 1920, 3), np.uint8)) == "loading"
+
+
+def test_a_failed_update_leaves_the_old_state_as_it_was(tmp_path, monkeypatch, capsys):
+    image = _save(tmp_path / "shot.png", _screen())
+    assert main(_template_args(tmp_path, image)) == 0
+    template = tmp_path / "templates" / "badge.png"
+    states = tmp_path / "states.yaml"
+    old_png, old_yaml = template.read_bytes(), states.read_text()
+
+    def fail(path, entry):
+        raise OSError("states.yaml: read-only")
+
+    monkeypatch.setattr(template_module, "save_state_entry", fail)
+    assert main(_template_args(tmp_path, image, roi=(100, 100, 80, 80))) == 1
+    assert "read-only" in capsys.readouterr().err
+    assert template.read_bytes() == old_png
+    assert states.read_text() == old_yaml
+    # A state that was new leaves no template behind.
+    assert main(_template_args(tmp_path, image, name="fresh")) == 1
+    assert not (tmp_path / "templates" / "fresh.png").exists()
+
+
+def test_a_malformed_states_file_stops_the_update_first(tmp_path, capsys):
+    image = _save(tmp_path / "shot.png", _screen())
+    assert main(_template_args(tmp_path, image)) == 0
+    template = tmp_path / "templates" / "badge.png"
+    old_png = template.read_bytes()
+    (tmp_path / "states.yaml").write_text("states: [")
+    assert main(_template_args(tmp_path, image, roi=(100, 100, 80, 80))) == 1
+    assert "cannot read states file" in capsys.readouterr().err
+    assert template.read_bytes() == old_png
+    assert (tmp_path / "states.yaml").read_text() == "states: ["
+    assert list(tmp_path.glob("**/*.tmp")) == []
 
 
 def test_search_area_stays_inside_the_picture():

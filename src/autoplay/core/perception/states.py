@@ -1,3 +1,5 @@
+import math
+import os
 from collections.abc import Callable
 from pathlib import Path
 
@@ -19,6 +21,18 @@ class StatesFileError(ValueError):
     """A states file is malformed or names a template that cannot be read."""
 
 
+def check_threshold(value: object) -> float:
+    """Return `value` as a threshold; raise ValueError unless it is a number
+    above 0 and at most 1. Outside that range a state would match every
+    frame, or none."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        # ValueError, not TypeError: callers treat every bad threshold alike.
+        raise ValueError(f"threshold must be a number, got {value!r}")  # noqa: TRY004
+    if not math.isfinite(value) or not 0 < value <= 1:
+        raise ValueError(f"threshold must be above 0 and at most 1, got {value!r}")
+    return float(value)
+
+
 class StateRegistry:
     """Named screen states, each recognised by one detector."""
 
@@ -34,7 +48,7 @@ class StateRegistry:
     ) -> None:
         if name in self._states:
             raise ValueError(f"state {name!r} is already registered")
-        self._states[name] = (detector, threshold)
+        self._states[name] = (detector, check_threshold(threshold))
 
     def scores(self, bgr: np.ndarray) -> dict[str, float]:
         return {name: detector(bgr) for name, (detector, _) in self._states.items()}
@@ -117,10 +131,10 @@ def load_states_file(path: Path) -> StateRegistry:
         name, kind = entry["name"], entry.get("kind")
         roi = _roi_of(path, entry)
         try:
-            threshold = float(entry.get("threshold", DEFAULT_THRESHOLD))
-        except (TypeError, ValueError):
+            threshold = check_threshold(entry.get("threshold", DEFAULT_THRESHOLD))
+        except ValueError as exc:
             raise StatesFileError(
-                f"{path}: state {name!r} has a bad threshold"
+                f"{path}: state {name!r} has a bad threshold: {exc}"
             ) from None
         if kind == "template":
             if not isinstance(entry.get("template"), str):
@@ -146,7 +160,9 @@ def load_states_file(path: Path) -> StateRegistry:
 def save_state_entry(path: Path, entry: dict) -> None:
     """Add `entry` to the states file at `path`, replacing the entry of the
     same name if there is one; the file is created when missing. Comments in
-    an existing file are not kept."""
+    an existing file are not kept. The file is replaced in one step, so a
+    failure leaves the old file whole. Raises StatesFileError if the existing
+    file cannot be read, OSError if the new one cannot be written."""
     path = Path(path)
     entries = read_states_entries(path) if path.exists() else []
     kept = [e for e in entries if e["name"] != entry["name"]]
@@ -158,4 +174,6 @@ def save_state_entry(path: Path, entry: dict) -> None:
     text = yaml.safe_dump(
         {"states": kept}, sort_keys=False, default_flow_style=None, allow_unicode=True
     )
-    path.write_text(text, encoding="utf-8")
+    staged = path.with_name(path.name + ".tmp")
+    staged.write_text(text, encoding="utf-8")
+    os.replace(staged, path)

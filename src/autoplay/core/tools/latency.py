@@ -9,7 +9,8 @@ from dataclasses import dataclass
 from autoplay.core import clock
 from autoplay.core.actions.do_until import TIMEOUT, ActionFailed, do_until
 from autoplay.core.capture.base import CaptureError, FrameSource
-from autoplay.core.capture.factory import SOURCE_FORMS, open_source
+from autoplay.core.capture.device import DeviceSource
+from autoplay.core.capture.factory import open_source
 from autoplay.core.controller.base import BUTTON_NAMES, Controller, ControllerError
 from autoplay.core.controller.serial_backend import SerialController
 from autoplay.core.perception.geometry import ROI, parse_roi
@@ -134,6 +135,12 @@ def _handle(args: argparse.Namespace) -> int:
                     f"unknown button {name!r}; expected one of {', '.join(BUTTON_NAMES)}"
                 )
         source = open_source(args.source)
+        # A file's frame times are media time and its frames cannot react to
+        # the press, so a "latency" from one would be meaningless.
+        if not isinstance(source, DeviceSource):
+            raise ValueError(  # noqa: TRY004 - a usage error like the others here
+                "--source must be a capture device (device:<index>)"
+            )
         roi = parse_roi(args.roi) if args.roi else None
         if args.n <= 0:
             raise ValueError("--n must be positive")
@@ -206,7 +213,7 @@ def register(sub) -> None:
     p.add_argument(
         "--source",
         default="device:0",
-        help=f"frame source: {SOURCE_FORMS} (default device:0)",
+        help="capture device, device:<index> (default device:0)",
     )
     p.add_argument("--button", required=True, help="button whose effect is timed")
     p.add_argument("--undo", required=True, help="button that reverses it")

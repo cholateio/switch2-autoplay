@@ -27,6 +27,18 @@ def test_crop_at_base_size_and_without_roi():
     assert np.array_equal(part, frame[20:60, 10:40])
 
 
+@pytest.mark.parametrize("size", [(640, 360), (320, 240), (100, 7), (1280, 720)])
+@pytest.mark.parametrize(
+    "box", [(1919, 1079, 1, 1), (1919, 0, 1, 1080), (0, 1079, 1920, 1), (5, 5, 1, 1)]
+)
+def test_crop_gives_at_least_one_pixel_at_every_edge(size, box):
+    frame = np.zeros((size[1], size[0], 3), np.uint8)
+    part = crop(frame, ROI(*box))
+    assert part.shape[0] >= 1
+    assert part.shape[1] >= 1
+    assert is_black(frame, ROI(*box))
+
+
 @pytest.mark.parametrize(
     "box", [(0, 0, 0, 10), (0, 0, 10, 0), (-1, 0, 10, 10), (1900, 0, 100, 10)]
 )
