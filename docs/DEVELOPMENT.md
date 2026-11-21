@@ -57,6 +57,7 @@ The installer refuses to run under the default execution policy; `-ExecutionPoli
 | `scripts/flash COM4 build-demo` | Flash the demo build (see Firmware) |
 | `scripts/win python scripts/hello.py COM4` | Check the serial link: prints the firmware's INFO and the PING round-trip time |
 | `scripts/win ap pad --port COM4 press A` | Drive the gamepad by hand: `press`, `hold`, `stick`, `release-all`, `info`; `--port dummy` prints what would be sent |
+| `scripts/win ap soak --port COM4 --seq DPAD_RIGHT,DPAD_LEFT --cycles 100` | Press a sequence many times and check on the capture that every press changed the picture and every cycle returned to its start; failures are saved under `runs/` |
 | `scripts/win --group hw ap pad --port COM4 selftest` | Check every button, the hold times and the watchdog by reading the reports back over USB (both board ports plugged into the PC) |
 
 ## Firmware
@@ -121,7 +122,29 @@ Measured on 2026-11-17 on the owner's machine.
 - **Reference screenshots**: `ap capture` saved 24 full-resolution (1920×1080) screenshots under the gitignored `fixtures/screens/<label>/`, at least three each for `main_menu`, `in_game`, `dialog`, `dialog_choice`, `loading_black`, `move_wheel` and `workbench`. The loading screen is pure black (mean luma 0.0).
 - **Switch 2 idle behaviour**: after a few minutes without input the console dims the picture while still sending a signal; press a button before saving screenshots. Turn auto-sleep off for long runs: a sleeping console and a dead capture stream look the same from the capture side.
 
+## M1 acceptance (2026-11-21)
+
+Run on the owner's Switch 2 with the owner present; pad in the dock, capture card on device 0.
+
+| Check | Result |
+|---|---|
+| `ap soak --seq DPAD_RIGHT,DPAD_LEFT --cycles 100` on the HOME menu | `cycles=100 step_failures=0 cycle_failures=0`, 115 s |
+| `ap soak --seq A,B --cycles 100 --settle-ms 800` with the cursor on System Settings | `cycles=100 step_failures=0 cycle_failures=0`, 195 s |
+| Process killed while it held the left stick | picture stopped 0.42 s after the kill (limit 0.5 s) |
+| Process alive but no longer renewing its lease (`--stall`) | movement lasted 2.35 s, then stopped by itself (limit `lease_ms` + 0.5 s = 2.5 s) |
+| F12 while it held the left stick | program ended with "emergency stop" (exit code 3); picture stopped 0.17 s later |
+| PC-side serial cable pulled while it held the left stick | program ended with "serial port COM4 failed" (exit code 1); picture stopped 0.34 s later |
+
+The four hold checks ran in the game, where a held stick keeps the picture moving; the picture was judged still when the difference between consecutive frames fell back to its idle level.
+
+- **Soak thresholds.** `ap soak` reduces each frame to 320×180 grey and takes the mean absolute difference. On the HOME menu the smallest real change, the cursor moving one icon in the bottom row, measured 0.33 to 0.37; the same picture taken twice measured 0.07 to 0.11. The defaults, 0.2 for both, sit between. Opening and closing System Settings measured 22.5 to 23.0.
+- **F12 is read by polling the key state** every 20 ms, not by registering a system hot key, because the hot-key registration reserves F12 for debuggers. It worked while the program ran in a terminal started from WSL.
+
 ## Easy to forget
+
+- **The pad becomes player 1.** While it is plugged into the dock, a single-player game listens to it and ignores the Joy-Con. To play by hand, unplug the OTG cable from the dock.
+- **The first press after the console wakes only registers the pad.** The HOME menu shows the controller icon and the cursor does not move; presses after that work. Send one throw-away press before an automated run.
+- **Never press A on the HOME menu without checking where the cursor is.** The bottom row holds Nintendo Switch Online and the eShop, which this project does not touch; take a screenshot and read the label first.
 
 - Windows Smart App Control is on. Any other venv launcher you call through `scripts/win` (e.g. `numpy-config`) may fail with `Failed to spawn: … (os error 4551)`; call it as `scripts/win python -m <module>` instead. Blocks are logged as Code Integrity event 3077 in `Microsoft-Windows-CodeIntegrity/Operational`.
 - `scripts/win` runs from the repo root, not your current directory.
