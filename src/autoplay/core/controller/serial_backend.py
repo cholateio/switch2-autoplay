@@ -28,7 +28,13 @@ _INBOX_LIMIT = 64
 # docs/protocol.md, "Duplicates and lost replies": SET_STATE seq values and all
 # other seq values come from separate ranges.
 _SEQ_SPAN = 128
+_STATE_REPLIES = (MsgType.ACK, MsgType.DONE, MsgType.BUSY, MsgType.NAK)
 _OTHER_SEQ_BASE = 128
+
+
+class _Superseded(ControllerError):
+    """A state call that `release_all()` overtook; the release has already
+    dealt with the device."""
 
 
 class Transport(Protocol):
@@ -91,7 +97,12 @@ class SerialController(Controller):
     After a command fails, what the device shows and remembers is unknown.
     Every state call then raises `ControllerError` until `release_all()`
     succeeds; that call starts a new session, which releases everything and
-    makes the device forget every seq it remembered."""
+    makes the device forget every seq it remembered.
+
+    State calls (`press`, `hold`, `release`, `stick`) belong to one thread.
+    `release_all()`, `heartbeat()` and `close()` may be called from any
+    thread; a `release_all()` makes a state call that is still in progress
+    raise `ControllerError` instead of finishing."""
 
     def __init__(
         self,
@@ -109,15 +120,19 @@ class SerialController(Controller):
         self._failure: Exception | None = None
         # One command at a time, each waiting for its immediate reply.
         self._tx_lock = threading.Lock()
-        self._seq_lock = threading.Lock()
+        # Guards the four fields below; held only for a few instructions.
+        self._op_lock = threading.Lock()
         self._state_count = 0
         self._other_count = 0
-        self._flags = 0
-        self._lease_until = 0.0
         # Set when a command's outcome is unknown. Sending further states then
         # could reuse a seq the device still remembers and be answered DONE
         # without being shown, so only a new session clears it.
         self._desynced = False
+        # Counts releases and failures. A state call may transmit only while
+        # the generation it started in is still the current one.
+        self._generation = 0
+        self._flags = 0
+        self._lease_until = 0.0
         # `clock.now()` of the last frame written; the firmware watchdog counts from it.
         self.last_tx = 0.0
         self._closed = False
@@ -152,44 +167,68 @@ class SerialController(Controller):
             self.release_all()
         except ControllerError:
             pass
-        self._closed = True
-        self._shutdown()
+        finally:
+            # Whatever the release did, the heartbeat must stop: silence is
+            # what makes the device release by itself.
+            self._closed = True
+            self._shutdown()
 
     # Controller backend ---------------------------------------------------
 
     def _apply(self, state: PadState, hold_ms: int) -> None:
         self._check_open()
-        if self._desynced:
-            raise ControllerError(
-                "an earlier command failed, so the device's state is unknown; "
-                "call release_all() to start a new session"
-            )
+        with self._op_lock:
+            if self._desynced:
+                raise ControllerError(
+                    "an earlier command failed, so the device's state is unknown; "
+                    "call release_all() to start a new session"
+                )
+            generation = self._generation
+            seq = self._state_count % _SEQ_SPAN
+            self._state_count += 1
+        self._forget_replies(seq)
         self._renew()
-        msg = Msg(
-            MsgType.SET_STATE,
-            self._next_seq(state_command=True),
-            pack_set_state(state, hold_ms),
-        )
+        msg = Msg(MsgType.SET_STATE, seq, pack_set_state(state, hold_ms))
         try:
-            if self._submit(msg).type != MsgType.DONE:
-                self._await_done(msg, hold_ms)
+            if self._submit(msg, generation).type != MsgType.DONE:
+                self._await_done(msg, hold_ms, generation)
+        except _Superseded:
+            raise
         except ControllerError:
-            self._desynced = True
+            self._fail(generation)
             raise
 
     def _release_all(self) -> None:
         self._check_open()
         self._renew()
-        if self._desynced:
-            # HELLO releases everything too, and clears the device's seq memory.
-            self._hello()
-            self._desynced = False
-            return
+        with self._op_lock:
+            # From here on no state call of an earlier generation transmits.
+            self._generation += 1
+            generation = self._generation
+            desynced = self._desynced
         try:
-            self._request(Msg(MsgType.RELEASE_ALL, self._next_seq()), (MsgType.ACK,))
+            if desynced:
+                # HELLO releases everything too, and clears the device's seq memory.
+                self._hello()
+            else:
+                self._request(
+                    Msg(MsgType.RELEASE_ALL, self._next_seq()), (MsgType.ACK,)
+                )
         except ControllerError:
-            self._desynced = True
+            self._fail(generation)
             raise
+        with self._op_lock:
+            # A failure recorded after this release began is newer than it.
+            if desynced and self._generation == generation:
+                self._desynced = False
+
+    def _fail(self, generation: int) -> None:
+        """Record that a command of `generation` had an unknown outcome."""
+        with self._op_lock:
+            if self._generation == generation:
+                self._desynced = True
+                # Calls already admitted must not transmit either.
+                self._generation += 1
 
     # Link -----------------------------------------------------------------
 
@@ -200,18 +239,22 @@ class SerialController(Controller):
     def _renew(self) -> None:
         self._lease_until = clock.now() + self.timing.lease_ms / 1000
 
-    def _next_seq(self, *, state_command: bool = False) -> int:
-        with self._seq_lock:
-            if state_command:
-                seq = self._state_count % _SEQ_SPAN
-                self._state_count += 1
-            else:
-                seq = _OTHER_SEQ_BASE + self._other_count % _SEQ_SPAN
-                self._other_count += 1
+    def _next_seq(self) -> int:
+        """A seq for a command other than SET_STATE."""
+        with self._op_lock:
+            seq = _OTHER_SEQ_BASE + self._other_count % _SEQ_SPAN
+            self._other_count += 1
+        self._forget_replies(seq)
+        return seq
+
+    def _forget_replies(self, seq: int) -> None:
         # A reply left over from the last use of this seq must not answer the new command.
         with self._cond:
             self._inbox = [m for m in self._inbox if m.seq != seq]
-        return seq
+
+    def _check_generation(self, generation: int | None) -> None:
+        if generation is not None and generation != self._generation:
+            raise _Superseded("the state call was overtaken by release_all()")
 
     def _take(self, wanted: Callable[[Msg], bool], timeout_s: float) -> Msg | None:
         deadline = clock.now() + timeout_s
@@ -230,12 +273,20 @@ class SerialController(Controller):
                 self._cond.wait(remaining)
 
     def _request(
-        self, msg: Msg, replies: tuple[int, ...], *, attempts: int | None = None
+        self,
+        msg: Msg,
+        replies: tuple[int, ...],
+        *,
+        attempts: int | None = None,
+        generation: int | None = None,
     ) -> Msg:
+        """Send `msg` and return its immediate reply. With `generation`, the
+        frame is written only while that generation is current."""
         frame = encode(msg)
         attempts = 1 + self.timing.ack_retries if attempts is None else attempts
         with self._tx_lock:
             for _ in range(attempts):
+                self._check_generation(generation)
                 try:
                     self._transport.write(frame)
                 except Exception as exc:
@@ -255,7 +306,12 @@ class SerialController(Controller):
         )
 
     def _hello(self) -> DeviceInfo:
-        self._transport.reset_input()
+        try:
+            self._transport.reset_input()
+        except Exception as exc:
+            raise ControllerError(
+                f"serial port {self._port_name} failed: {exc}"
+            ) from exc
         deadline = clock.now() + self.timing.hello_window_ms / 1000
         while True:
             try:
@@ -269,7 +325,12 @@ class SerialController(Controller):
                         f"{self.timing.hello_window_ms} ms; is the firmware running?"
                     ) from None
                 continue
-            info = unpack_info(reply.payload)
+            try:
+                info = unpack_info(reply.payload)
+            except ValueError as exc:
+                raise ControllerError(
+                    f"bad INFO from {self._port_name}: {exc}"
+                ) from exc
             if info.proto_ver != PROTO_VERSION:
                 raise ControllerError(
                     f"device on {self._port_name} speaks protocol version {info.proto_ver}; "
@@ -278,14 +339,12 @@ class SerialController(Controller):
             self._flags = info.flags
             return info
 
-    def _submit(self, msg: Msg) -> Msg:
+    def _submit(self, msg: Msg, generation: int) -> Msg:
         """Get `msg` accepted; return the ACK, or the DONE of a state that has
         already finished."""
         give_up = clock.now() + self.timing.done_slack_ms / 1000
         while True:
-            reply = self._request(
-                msg, (MsgType.ACK, MsgType.DONE, MsgType.BUSY, MsgType.NAK)
-            )
+            reply = self._request(msg, _STATE_REPLIES, generation=generation)
             if reply.type in (MsgType.ACK, MsgType.DONE):
                 return reply
             if reply.type == MsgType.NAK:
@@ -296,11 +355,12 @@ class SerialController(Controller):
                 )
             time.sleep(self.timing.min_state_ms / 1000)
 
-    def _await_done(self, msg: Msg, hold_ms: int) -> None:
+    def _await_done(self, msg: Msg, hold_ms: int, generation: int) -> None:
         window_s = (hold_ms + self.timing.done_slack_ms) / 1000
         for query in range(self.timing.done_queries + 1):
             deadline = clock.now() + window_s
             while (remaining := deadline - clock.now()) > 0:
+                self._check_generation(generation)
                 # A call that blocks is still the control loop making progress.
                 self._renew()
                 if self._take(
@@ -312,9 +372,7 @@ class SerialController(Controller):
                 break
             # Same frame, same seq: the device answers with what became of it
             # and never shows the state a second time.
-            reply = self._request(
-                msg, (MsgType.ACK, MsgType.DONE, MsgType.BUSY, MsgType.NAK)
-            )
+            reply = self._request(msg, _STATE_REPLIES, generation=generation)
             if reply.type == MsgType.DONE:
                 return
             if reply.type == MsgType.NAK:

@@ -8,7 +8,7 @@ from fake_device import FakeDevice
 from autoplay.core import clock
 from autoplay.core.actions.timing import load_timing
 from autoplay.core.controller.base import ControllerError, ControllerTimeout
-from autoplay.core.controller.protocol import MsgType
+from autoplay.core.controller.protocol import Msg, MsgType, pack_set_state
 from autoplay.core.controller.serial_backend import SerialController
 from autoplay.core.controller.types import Button, PadState
 
@@ -303,3 +303,91 @@ def test_release_all_failure_also_requires_a_resync(connect):
         pad.hold("B")
     pad.release_all()
     assert device.state == PadState()
+
+
+def run_in_thread(call):
+    """Run `call` on a thread; returns (thread, list that receives its exception)."""
+    raised = []
+
+    def target():
+        try:
+            call()
+        except Exception as exc:  # noqa: BLE001 - handed to the test
+            raised.append(exc)
+
+    thread = threading.Thread(target=target)
+    thread.start()
+    return thread, raised
+
+
+def test_release_all_from_another_thread_ends_a_long_hold(connect):
+    device = FakeDevice()
+    pad = connect(device)
+    thread, raised = run_in_thread(lambda: pad.stick("L", 0, 1, ms=5000))
+    time.sleep(0.15)
+    assert device.state.ly == 0
+
+    pad.release_all()
+    thread.join(0.5)
+
+    assert not thread.is_alive()
+    assert isinstance(raised[0], ControllerError)
+    assert device.state == PadState()
+    # The release settled the device, so the next call needs no new session.
+    pad.hold("B")
+    assert device.state == PadState(buttons=Button.B)
+    assert len(device.seqs[MsgType.HELLO]) == 1
+
+
+def test_a_waiting_state_is_not_shown_again_after_a_new_session(connect):
+    device = FakeDevice(drop_dones=1)
+    pad = connect(device, done_slack_ms=150)
+    thread, raised = run_in_thread(lambda: pad.stick("L", 0, 1, ms=30))
+    # The state has finished on the device, its DONE was lost, and the caller
+    # is still waiting before it asks again with the same seq.
+    time.sleep(0.1)
+    pad._desynced = True
+    pad.release_all()
+    thread.join(1.0)
+
+    assert not thread.is_alive()
+    assert isinstance(raised[0], ControllerError)
+    # HELLO made the device forget that seq; asking again would have shown the
+    # stick deflection a second time.
+    assert len(device.applied) == 1
+    assert device.state == PadState()
+
+
+def test_a_call_admitted_before_a_failure_does_not_transmit(connect):
+    device = FakeDevice()
+    pad = connect(device)
+    generation = pad._generation
+    device.deaf = True
+    with pytest.raises(ControllerTimeout):
+        pad.release_all()
+    device.deaf = False
+    # Counted per type: the heartbeat's PINGs go on meanwhile.
+    states_before = list(device.seqs.get(MsgType.SET_STATE, []))
+
+    stale = Msg(MsgType.SET_STATE, 5, pack_set_state(PadState(buttons=Button.A), 16))
+    with pytest.raises(ControllerError):
+        pad._request(stale, (MsgType.ACK,), generation=generation)
+    assert device.seqs.get(MsgType.SET_STATE, []) == states_before
+
+
+def test_close_stops_everything_even_if_the_port_fails_during_recovery():
+    device = FakeDevice()
+    pad = SerialController("fake", timing=FAST, transport=device)
+    pad.hold("A")
+    device.deaf = True
+    with pytest.raises(ControllerTimeout):
+        pad.hold("B")
+
+    def broken_reset():
+        raise OSError("device unplugged")
+
+    device.reset_input = broken_reset
+    pad.close()
+
+    assert device.closed
+    assert not [t for t in threading.enumerate() if t.name.startswith("pad-")]
