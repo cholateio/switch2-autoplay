@@ -8,6 +8,7 @@ from autoplay.core.capture.base import CaptureError, Frame
 from autoplay.core.controller.base import ControllerError
 from autoplay.core.controller.dummy import DummyController
 from autoplay.core.controller.types import Hat
+from autoplay.core.perception.geometry import ROI, parse_roi
 from autoplay.core.runtime.estop import EmergencyStop, EStop
 from autoplay.core.runtime.runlog import RunLog
 from autoplay.core.tools import soak as soak_module
@@ -16,7 +17,6 @@ from autoplay.core.tools.soak import (
     difference,
     fresh_frame,
     parse_buttons,
-    parse_roi,
     run_soak,
     signature,
 )
@@ -124,7 +124,7 @@ def test_a_smaller_capture_resolution_works(tmp_path):
 
 def test_roi_limits_what_is_compared(tmp_path):
     # The tile moves in the middle third; the top strip never changes.
-    result, _, _ = soak(FakeConsole(), tmp_path, cycles=1, roi=(0, 0, 1920, 200))
+    result, _, _ = soak(FakeConsole(), tmp_path, cycles=1, roi=ROI(0, 0, 1920, 200))
     assert result.step_failures == 2
 
 
@@ -151,8 +151,8 @@ def test_difference_of_equal_frames_is_zero_and_grows_with_change():
 
 
 def test_parse_roi():
-    assert parse_roi("0,0,1920,1080") == (0, 0, 1920, 1080)
-    assert parse_roi("100,200,300,400") == (100, 200, 300, 400)
+    assert parse_roi("0,0,1920,1080") == ROI(0, 0, 1920, 1080)
+    assert parse_roi("100,200,300,400") == ROI(100, 200, 300, 400)
     for bad in ("1,2,3", "a,b,c,d", "0,0,0,10", "1900,0,100,10", "-1,0,10,10"):
         with pytest.raises(ValueError):
             parse_roi(bad)

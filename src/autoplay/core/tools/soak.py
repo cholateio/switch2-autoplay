@@ -12,11 +12,10 @@ from autoplay.core.capture.base import CaptureError, Frame, FrameSource
 from autoplay.core.capture.factory import SOURCE_FORMS, open_source
 from autoplay.core.controller.base import BUTTON_NAMES, Controller, ControllerError
 from autoplay.core.controller.serial_backend import SerialController
+from autoplay.core.perception.geometry import ROI, crop, parse_roi
 from autoplay.core.runtime.estop import EmergencyStop, EStop
 from autoplay.core.runtime.runlog import RunLog
 
-# Coordinates given on the command line refer to a 1920x1080 picture.
-REFERENCE_SIZE = (1920, 1080)
 COMPARE_SIZE = (320, 180)
 FRAME_TIMEOUT_S = 1.0
 # Mean absolute difference, on a 0-255 scale, between two pictures reduced to
@@ -25,8 +24,6 @@ FRAME_TIMEOUT_S = 1.0
 # the same picture taken twice differs by 0.07 to 0.11 (docs/DEVELOPMENT.md).
 DEFAULT_CHANGE_THRESHOLD = 0.2
 DEFAULT_SAME_THRESHOLD = 0.2
-
-Roi = tuple[int, int, int, int]
 
 
 @dataclass(frozen=True)
@@ -46,19 +43,6 @@ class SoakResult:
         )
 
 
-def parse_roi(text: str) -> Roi:
-    """Parse `x,y,w,h` in 1920x1080 coordinates; raise ValueError if it is
-    malformed or not inside that picture."""
-    try:
-        x, y, w, h = (int(part) for part in text.split(","))
-    except ValueError:
-        raise ValueError(f"invalid --roi {text!r}; expected x,y,w,h") from None
-    ref_w, ref_h = REFERENCE_SIZE
-    if w <= 0 or h <= 0 or x < 0 or y < 0 or x + w > ref_w or y + h > ref_h:
-        raise ValueError(f"--roi {text} is not inside {ref_w}x{ref_h}")
-    return x, y, w, h
-
-
 def parse_buttons(text: str) -> list[str]:
     """Split a comma-separated button list; raise ValueError naming a button
     that does not exist."""
@@ -71,21 +55,14 @@ def parse_buttons(text: str) -> list[str]:
     return names
 
 
-def signature(bgr: np.ndarray, roi: Roi | None) -> np.ndarray:
+def signature(bgr: np.ndarray, roi: ROI | None) -> np.ndarray:
     """Reduce a frame, or the part of it inside `roi`, to a small grey
     picture that two frames can be compared by."""
-    if roi is not None:
-        height, width = bgr.shape[:2]
-        sx, sy = width / REFERENCE_SIZE[0], height / REFERENCE_SIZE[1]
-        x, y, w, h = roi
-        bgr = bgr[
-            round(y * sy) : round((y + h) * sy), round(x * sx) : round((x + w) * sx)
-        ]
-    small = cv2.resize(bgr, COMPARE_SIZE, interpolation=cv2.INTER_AREA)
+    small = cv2.resize(crop(bgr, roi), COMPARE_SIZE, interpolation=cv2.INTER_AREA)
     return cv2.cvtColor(small, cv2.COLOR_BGR2GRAY).astype(np.float32)
 
 
-def difference(a: Frame, b: Frame, roi: Roi | None) -> float:
+def difference(a: Frame, b: Frame, roi: ROI | None) -> float:
     return float(np.abs(signature(a.bgr, roi) - signature(b.bgr, roi)).mean())
 
 
@@ -111,7 +88,7 @@ def run_soak(
     settle_s: float,
     change_threshold: float = DEFAULT_CHANGE_THRESHOLD,
     same_threshold: float = DEFAULT_SAME_THRESHOLD,
-    roi: Roi | None = None,
+    roi: ROI | None = None,
     sleep: Callable[[float], None] = time.sleep,
 ) -> SoakResult:
     """Press `buttons` in order, `cycles` times. Each press must change the

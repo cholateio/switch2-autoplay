@@ -10,9 +10,9 @@ import numpy as np
 from autoplay.core import clock
 from autoplay.core.capture.base import CaptureError, CaptureStats, FrameSource
 from autoplay.core.capture.factory import SOURCE_FORMS, open_source
+from autoplay.core.perception.ops import is_black
 
 PREVIEW_SIZE = (960, 540)
-BLACK_MEAN_LUMA = 12
 SCREENS_DIR = Path("fixtures/screens")
 _LABEL_RE = re.compile(r"[A-Za-z0-9_-]+")
 _MAX_LABELS = 9
@@ -38,11 +38,6 @@ def label_for_key(key: int, labels: list[str]) -> str | None:
     if ord("1") <= key <= ord("9") and key - ord("1") < len(labels):
         return labels[key - ord("1")]
     return None
-
-
-def is_black(bgr: np.ndarray) -> bool:
-    """True when the mean luma is below 12."""
-    return float(cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY).mean()) < BLACK_MEAN_LUMA
 
 
 def screenshot_path(root: Path, label: str, now: datetime) -> Path:

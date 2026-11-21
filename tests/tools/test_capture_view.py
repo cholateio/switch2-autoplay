@@ -1,31 +1,16 @@
 from datetime import datetime
 from pathlib import Path
 
-import numpy as np
 import pytest
 
 from autoplay.cli import main
 from autoplay.core.capture.base import CaptureStats
 from autoplay.core.tools.capture_view import (
-    is_black,
     label_for_key,
     overlay_lines,
     parse_labels,
     screenshot_path,
 )
-
-
-def test_is_black_threshold_is_mean_luma_12():
-    assert is_black(np.full((54, 96, 3), 11, np.uint8))
-    assert not is_black(np.full((54, 96, 3), 12, np.uint8))
-
-
-def test_is_black_uses_mean_not_max():
-    img = np.zeros((100, 100, 3), np.uint8)
-    img[:5] = 255
-    assert not is_black(img)
-    img[:4] = 0
-    assert is_black(img)
 
 
 def test_parse_labels():
