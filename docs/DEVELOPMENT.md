@@ -125,4 +125,5 @@ Measured on 2026-11-17 on the owner's machine.
 | `AGENTS.md` | Goal, stack, layout, constraints and conventions (tool-neutral) |
 | `docs/specs/` | Requirement specs |
 | `docs/research/` | Research notes the specs cite |
+| `docs/protocol.md` | The PC-to-ESP32 serial protocol; the firmware and the Python codec both follow it |
 | `docs/DEVELOPMENT.md` | This file |
