@@ -144,10 +144,24 @@ The four hold checks ran in the game, where a held stick keeps the picture movin
 - **Soak thresholds.** `ap soak` reduces each frame to 320×180 grey and takes the mean absolute difference. On the HOME menu the smallest real change, the cursor moving one icon in the bottom row, measured 0.33 to 0.37; the same picture taken twice measured 0.07 to 0.11. The defaults, 0.2 for both, sit between. Opening and closing System Settings measured 22.5 to 23.0.
 - **F12 is read by polling the key state** every 20 ms, not by registering a system hot key, because the hot-key registration reserves F12 for debuggers. It worked while the program ran in a terminal started from WSL.
 
+## M2 acceptance (2026-11-21)
+
+Run on the owner's Switch 2 with the owner present; pad in the dock, capture card on device 0.
+
+| Check | Result |
+|---|---|
+| `ap latency --button DPAD_RIGHT --undo DPAD_LEFT --n 30` on the HOME menu | `measured=30 missed=0 drifted=0`, p50 99.8 ms, p90 116.4 ms, min 99.1 ms, max 116.9 ms |
+| `ap classify` on the regrouped screenshots in `fixtures/m2/screens/` | 16/16 right for `main_menu`, `in_game` and `loading_black` (scores ≥ 0.98); 14/14 pictures of the other seven screens got no state (highest wrong score 0.25) |
+| `ap classify` on three HOME frames taken after the templates were made (`fixtures/m2/heldout/`) | 3/3 `main_menu`, score 1.00 |
+
+- **Press to picture is about 100 ms on the HOME menu.** That covers the serial command (about 12 ms until the console takes the report), the console drawing the change, HDMI, and the capture card (at most about 64 ms, from the M0 frame-age check). The samples fall into two groups one console frame (16.7 ms) apart: 19 at 99–100 ms and 11 at 116–117 ms. A game may take longer to react than the HOME menu; measure it there before tuning waits.
+- **The templates were placed using the same screenshots `ap classify` checks**, so the 16/16 is not a held-out result; the three frames in `fixtures/m2/heldout/` are.
+
 ## Easy to forget
 
 - **The pad becomes player 1.** While it is plugged into the dock, a single-player game listens to it and ignores the Joy-Con. To play by hand, unplug the OTG cable from the dock.
 - **The first press after the console wakes only registers the pad.** The HOME menu shows the controller icon and the cursor does not move; presses after that work. Send one throw-away press before an automated run.
+- **A console woken from sleep shows a lock screen ("A 繼續"), and the capture card may show its own "No Signal" picture for a few seconds first.** A is safe there: it only leads to the HOME menu. Y opens the game news; avoid it.
 - **Never press A on the HOME menu without checking where the cursor is.** The bottom row holds Nintendo Switch Online and the eShop, which this project does not touch; take a screenshot and read the label first.
 
 - **`do_until` needs `heartbeat=pad.heartbeat`.** It can wait for seconds without touching the controller; without the heartbeat a held button is released after `lease_ms` and an emergency stop is not noticed until the next action.
