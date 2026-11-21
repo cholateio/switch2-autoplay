@@ -13,6 +13,11 @@ MAX_PAYLOAD = 16
 _HEADER = 4
 _OVERHEAD = _HEADER + 1
 _SET_STATE = struct.Struct("<HBBBBBH")
+_PONG = struct.Struct("<BB")
+_INFO = struct.Struct("<BBBBIHH")
+
+FLAG_USB_MOUNTED = 0x01
+FLAG_WD_TRIPPED = 0x02
 
 
 class MsgType(enum.IntEnum):
@@ -96,6 +101,35 @@ def unpack_set_state(payload: bytes) -> tuple[PadState, int]:
         )
     buttons, hat, lx, ly, rx, ry, hold_ms = _SET_STATE.unpack(payload)
     return PadState(Button(buttons), Hat(hat), lx, ly, rx, ry), hold_ms
+
+
+@dataclass(frozen=True)
+class DeviceInfo:
+    """The INFO reply. `flags` uses the FLAG_* bits."""
+
+    proto_ver: int
+    backend: int
+    flags: int
+    queue_free: int
+    uptime_ms: int
+    rx_crc_errors: int
+    wd_trips: int
+
+
+def unpack_pong(payload: bytes) -> tuple[int, int]:
+    """Return `(flags, queue_free)` from a PONG payload; raise ValueError if
+    its length is wrong."""
+    if len(payload) != _PONG.size:
+        raise ValueError(f"PONG payload is {len(payload)} bytes; expected {_PONG.size}")
+    return _PONG.unpack(payload)
+
+
+def unpack_info(payload: bytes) -> DeviceInfo:
+    """Return the fields of an INFO payload; raise ValueError if its length
+    is wrong."""
+    if len(payload) != _INFO.size:
+        raise ValueError(f"INFO payload is {len(payload)} bytes; expected {_INFO.size}")
+    return DeviceInfo(*_INFO.unpack(payload))
 
 
 class FrameParser:

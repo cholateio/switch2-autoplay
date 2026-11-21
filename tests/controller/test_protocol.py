@@ -4,12 +4,15 @@ import pytest
 
 from autoplay.core.controller.protocol import (
     MAX_PAYLOAD,
+    DeviceInfo,
     FrameParser,
     Msg,
     MsgType,
     crc8,
     encode,
     pack_set_state,
+    unpack_info,
+    unpack_pong,
     unpack_set_state,
 )
 from autoplay.core.controller.types import Button, Hat, PadState
@@ -182,3 +185,24 @@ def test_unpack_set_state_rejects_bad_payloads():
         unpack_set_state(good[:-1])
     with pytest.raises(ValueError):
         unpack_set_state(good[:2] + b"\x09" + good[3:])
+
+
+def test_unpack_pong():
+    assert unpack_pong(bytes([3, 7])) == (3, 7)
+    with pytest.raises(ValueError):
+        unpack_pong(b"\x01")
+
+
+def test_unpack_info():
+    payload = bytes.fromhex("01 01 03 08 78 56 34 12 02 00 05 00")
+    assert unpack_info(payload) == DeviceInfo(
+        proto_ver=1,
+        backend=1,
+        flags=3,
+        queue_free=8,
+        uptime_ms=0x12345678,
+        rx_crc_errors=2,
+        wd_trips=5,
+    )
+    with pytest.raises(ValueError):
+        unpack_info(payload[:-1])

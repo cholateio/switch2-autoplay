@@ -54,6 +54,7 @@ The installer refuses to run under the default execution policy; `-ExecutionPoli
 | `make -C firmware/test_host test` | Host tests of the firmware's pure-C core (protocol parser, pad queue), built with ASan and UBSan |
 | `scripts/flash COM4` | Flash `firmware/build/` to the ESP32-S3 |
 | `scripts/flash COM4 build-demo` | Flash the demo build (see Firmware) |
+| `scripts/win python scripts/hello.py COM4` | Check the serial link: prints the firmware's INFO and the PING round-trip time |
 
 ## Firmware
 
@@ -108,6 +109,10 @@ Measured on 2026-11-17 on the owner's machine.
 - **ESP32-S3 board**: ESP32-S3 rev v0.2, 16 MB flash, 8 MB PSRAM. `esptool --chip esp32s3 --port COM4 --baud 460800` enters the bootloader by itself (no BOOT button) and flashed a 330 KB image in 3.9 s.
 - **The Switch 2 accepts the HORI Pokken identity** (gate A, 2026-11-21). With the demo firmware and the OTG port in the dock, the HOME menu showed a connected controller as player 1 and the cursor moved one tile to the right once per second; the capture card saw a burst of motion every 1.00 s. With the normal firmware (neutral reports only) the picture stayed still. No console setting was changed.
 - **On a PC the pad enumerates as `HID\VID_0F0D&PID_0092`**, bus-reported name `POKKEN CONTROLLER`, manufacturer `HORI CO.,LTD.`, no serial number. Windows polls it every 4 ms and gets one 8-byte report per poll; the demo's 80 ms press measured 80.0 ms.
+- **Serial link** (2026-11-21): UART0 on GPIO43 (TX) / GPIO44 (RX) through the CH343 bridge at 921600 baud. `scripts/hello.py` measured a PING round trip of 0.48 ms (p50) and 0.6 ms (max) over 100 pings, with no damaged frame in either direction.
+- **Read the port one byte first.** `port.read(n)` with a timeout waits the whole timeout unless `n` bytes arrive, and Windows rounds that wait up to a 15.6 ms tick: the same round trip measured 15.4 ms that way. `port.read(1)` followed by `port.read(port.in_waiting)` returns as soon as data is there.
+- **The first time the port is opened after flashing, the board resets** (INFO showed an uptime of 181 ms); later opens do not reset it. A host must therefore retry HELLO for a while instead of failing on the first unanswered one.
+- **A new state reaches the console 11 to 14 ms after its command** (hold 80 ms: DONE after 94 ms; hold 0: DONE after 27 ms; hold 1000 ms: DONE after 1013 ms). The firmware always has one report waiting for the console's next poll, so a new state goes out one poll after the report already waiting.
 - **PokemonAutomation's firmware was never checked on the console.** Its `.bin` was flashed and verified during M0, but Smart App Control blocks its unsigned Windows client and the owner chose to leave Smart App Control on. Our own firmware has replaced it on the board.
 - **Reference screenshots**: `ap capture` saved 24 full-resolution (1920×1080) screenshots under the gitignored `fixtures/screens/<label>/`, at least three each for `main_menu`, `in_game`, `dialog`, `dialog_choice`, `loading_black`, `move_wheel` and `workbench`. The loading screen is pure black (mean luma 0.0).
 - **Switch 2 idle behaviour**: after a few minutes without input the console dims the picture while still sending a signal; press a button before saving screenshots. Turn auto-sleep off for long runs: a sleeping console and a dead capture stream look the same from the capture side.

@@ -150,6 +150,11 @@ esp_err_t hid_backend_init(void)
     return tinyusb_driver_install(&cfg);
 }
 
+bool hid_backend_mounted(void)
+{
+    return tud_ready();
+}
+
 bool hid_backend_ready(void)
 {
     portENTER_CRITICAL(&s_lock);

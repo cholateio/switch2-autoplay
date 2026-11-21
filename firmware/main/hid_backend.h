@@ -11,6 +11,9 @@
 
 esp_err_t hid_backend_init(void);
 
+// True when the host has configured the device and the bus is not suspended.
+bool hid_backend_mounted(void);
+
 // True when the host has configured the device, the IN endpoint is free and
 // the delivered callback for the previous report has been given its state.
 bool hid_backend_ready(void);
