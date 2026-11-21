@@ -77,3 +77,7 @@ firmware/sdkconfig
 firmware/sdkconfig.old
 firmware/managed_components/
 firmware/test_host/build/
+
+# Game pack templates are cut from screenshots; the agent memory is per machine
+game_packs/*/templates/
+memory/
