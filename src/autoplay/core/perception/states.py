@@ -141,3 +141,21 @@ def load_states_file(path: Path) -> StateRegistry:
         except ValueError as exc:
             raise StatesFileError(f"{path}: {exc}") from exc
     return registry
+
+
+def save_state_entry(path: Path, entry: dict) -> None:
+    """Add `entry` to the states file at `path`, replacing the entry of the
+    same name if there is one; the file is created when missing. Comments in
+    an existing file are not kept."""
+    path = Path(path)
+    entries = read_states_entries(path) if path.exists() else []
+    kept = [e for e in entries if e["name"] != entry["name"]]
+    position = next(
+        (i for i, e in enumerate(entries) if e["name"] == entry["name"]), len(kept)
+    )
+    kept.insert(position, entry)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    text = yaml.safe_dump(
+        {"states": kept}, sort_keys=False, default_flow_style=None, allow_unicode=True
+    )
+    path.write_text(text, encoding="utf-8")
