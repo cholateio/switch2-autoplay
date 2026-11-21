@@ -54,6 +54,14 @@ class StateRegistry:
     def scores(self, bgr: np.ndarray) -> dict[str, float]:
         return {name: detector(bgr) for name, (detector, _) in self._states.items()}
 
+    def matches(self, bgr: np.ndarray) -> list[str]:
+        """Return every state whose score reaches its own threshold."""
+        return [
+            name
+            for name, score in self.scores(bgr).items()
+            if score >= self._states[name][1]
+        ]
+
     def classify(self, bgr: np.ndarray) -> str | None:
         """Return the state with the highest score among those that reach
         their own threshold, or None when no state does."""

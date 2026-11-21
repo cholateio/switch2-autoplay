@@ -161,3 +161,11 @@ def test_a_template_that_cannot_match_is_reported_at_load(
 def test_a_missing_states_file_is_reported(tmp_path):
     with pytest.raises(StatesFileError, match="cannot read states file"):
         load_states_file(tmp_path / "none.yaml")
+
+
+def test_matches_lists_every_state_at_its_threshold():
+    registry = StateRegistry()
+    registry.register("high", lambda bgr: 0.9)
+    registry.register("exact", lambda bgr: 0.8)
+    registry.register("low", lambda bgr: 0.5)
+    assert registry.matches(np.zeros((4, 4, 3), np.uint8)) == ["high", "exact"]
