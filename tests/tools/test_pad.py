@@ -1,7 +1,7 @@
 import pytest
 
 from autoplay.cli import main
-from autoplay.core.controller.base import ControllerTimeout
+from autoplay.core.controller.base import Controller, ControllerTimeout
 from autoplay.core.controller.dummy import DummyController
 from autoplay.core.tools import pad
 
@@ -99,3 +99,31 @@ def test_keep_alive_with_stall_never_renews():
     sleep, _ = interrupt_after(5)
     pad.keep_alive(counting, stall=True, sleep=sleep)
     assert counting.heartbeats == 0
+
+
+class DevicePad(Controller):
+    """Not a dummy, so `hold` stays in the foreground; its first heartbeat
+    happens after the emergency stop has been tripped."""
+
+    def __init__(self):
+        super().__init__()
+        self.applied = 0
+        self.released = 0
+
+    def _apply(self, state, hold_ms):
+        self.applied += 1
+
+    def _release_all(self):
+        self.released += 1
+
+    def heartbeat(self):
+        self._estop.trip()
+        super().heartbeat()
+
+
+def test_emergency_stop_during_a_hold_exits_with_its_own_code(capsys, monkeypatch):
+    device_pad = DevicePad()
+    monkeypatch.setattr(pad, "open_controller", lambda port: device_pad)
+    assert main(["pad", "--port", "COM9", "hold", "A"]) == 3
+    assert "emergency stop" in capsys.readouterr().err
+    assert (device_pad.applied, device_pad.released) == (1, 1)

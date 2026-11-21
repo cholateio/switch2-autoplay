@@ -6,6 +6,7 @@ from collections.abc import Callable
 from autoplay.core.controller.base import BUTTON_NAMES, Controller, ControllerError
 from autoplay.core.controller.dummy import DummyController
 from autoplay.core.controller.serial_backend import SerialController
+from autoplay.core.runtime.estop import EmergencyStop, EStop
 
 DUMMY_PORT = "dummy"
 
@@ -67,7 +68,7 @@ def _run_action(pad: Controller, args: argparse.Namespace) -> None:
             print("dummy controller: no device")
     # A dummy has nothing to keep alive; its log is the result.
     if held and not isinstance(pad, DummyController):
-        print("holding; press Ctrl-C to release", file=sys.stderr)
+        print("holding; Ctrl-C or F12 releases", file=sys.stderr)
         keep_alive(pad, stall=args.stall)
 
 
@@ -89,8 +90,14 @@ def _handle(args: argparse.Namespace) -> int:
     except ControllerError as exc:
         print(f"ap pad: {exc}", file=sys.stderr)
         return 1
+    # F12 releases a held state from any window; a dummy has nothing to stop.
+    estop = EStop(hotkey=not isinstance(pad, DummyController))
+    pad.attach_estop(estop)
     try:
         _run_action(pad, args)
+    except EmergencyStop:
+        print("ap pad: emergency stop", file=sys.stderr)
+        return 3
     except ControllerError as exc:
         print(f"ap pad: {exc}", file=sys.stderr)
         return 1
@@ -98,6 +105,7 @@ def _handle(args: argparse.Namespace) -> int:
         print(f"ap pad: {exc}", file=sys.stderr)
         return 2
     finally:
+        estop.close()
         try:
             pad.close()
         except ControllerError as exc:

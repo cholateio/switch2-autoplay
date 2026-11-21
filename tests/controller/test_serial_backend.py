@@ -11,6 +11,7 @@ from autoplay.core.controller.base import ControllerError, ControllerTimeout
 from autoplay.core.controller.protocol import Msg, MsgType, pack_set_state
 from autoplay.core.controller.serial_backend import SerialController
 from autoplay.core.controller.types import Button, PadState
+from autoplay.core.runtime.estop import EmergencyStop, EStop
 
 # Short link timeouts keep the failure-path tests quick; the watchdog (300 ms)
 # is the device's and stays real.
@@ -448,3 +449,25 @@ def test_no_state_is_written_when_the_release_times_out(connect):
     # Only the first hold("A") was ever written: the failed release left the
     # device unknown, and nothing may be shown on top of that.
     assert device.written_types.count(MsgType.SET_STATE) == 1
+
+
+def test_emergency_stop_releases_and_ends_a_long_hold(connect):
+    device = FakeDevice()
+    pad = connect(device)
+    estop = EStop(hotkey=False)
+    pad.attach_estop(estop)
+    thread, raised = run_in_thread(lambda: pad.stick("L", 0, 1, ms=5000))
+    time.sleep(0.15)
+
+    estop.trip()
+    thread.join(0.5)
+
+    assert not thread.is_alive()
+    assert isinstance(raised[0], EmergencyStop)
+    assert device.state == PadState()
+    assert device.releases == 1
+    with pytest.raises(EmergencyStop):
+        pad.hold("A")
+    pad.close()
+    assert device.closed
+    assert device.releases == 1

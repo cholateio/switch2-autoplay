@@ -4,6 +4,7 @@ from typing import Literal
 
 from autoplay.core.actions.timing import Timing, load_timing
 from autoplay.core.controller.types import Button, Hat, PadState
+from autoplay.core.runtime.estop import EmergencyStop, EStop
 
 ButtonName = str
 
@@ -53,6 +54,27 @@ class Controller(ABC):
         self.state = PadState()
         # Held D-pad directions, oldest first: of two opposite ones the later wins.
         self._dpad: list[str] = []
+        self._estop: EStop | None = None
+
+    def attach_estop(self, estop: EStop) -> None:
+        """Tie this controller to an emergency stop: when it trips, everything
+        is released once, and every call from then on raises `EmergencyStop`."""
+        self._estop = estop
+        estop.add_callback(self._on_estop)
+
+    def _on_estop(self) -> None:
+        self._dpad.clear()
+        self.state = PadState()
+        try:
+            self._release_all()
+        except ControllerError:
+            # The stop stands either way; with the link gone the device's own
+            # watchdog does the releasing.
+            pass
+
+    def _check_estop(self) -> None:
+        if self._estop is not None and self._estop.tripped.is_set():
+            raise EmergencyStop("the emergency stop was tripped")
 
     def press(self, button: ButtonName, ms: int | None = None) -> None:
         """Press `button` for `ms` (default `press_ms`), then release it for
@@ -89,6 +111,7 @@ class Controller(ABC):
 
     def release_all(self) -> None:
         """Release every button and centre both sticks at once."""
+        self._check_estop()
         self._dpad.clear()
         self.state = PadState()
         self._release_all()
@@ -97,6 +120,7 @@ class Controller(ABC):
         """Tell the controller the control loop is alive. A held button or
         stick is released by the device once these calls (or any other call)
         stop for longer than the lease."""
+        self._check_estop()
 
     def close(self) -> None:
         """Release everything and free the device."""
@@ -109,7 +133,16 @@ class Controller(ABC):
     def _release_all(self) -> None: ...
 
     def _set(self, state: PadState, hold_ms: int) -> None:
-        self._apply(state, hold_ms)
+        self._check_estop()
+        try:
+            self._apply(state, hold_ms)
+        except ControllerError as exc:
+            # A stop that trips during the call cuts it short through the
+            # backend; the caller should see the stop, not a link error.
+            if self._estop is not None and self._estop.tripped.is_set():
+                raise EmergencyStop("the emergency stop was tripped") from exc
+            raise
+        self._check_estop()
         self.state = state
 
     @staticmethod

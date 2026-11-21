@@ -18,6 +18,7 @@ from autoplay.core.controller.protocol import (
     unpack_pong,
 )
 from autoplay.core.controller.types import PadState
+from autoplay.core.runtime.estop import EmergencyStop
 
 BAUD = 921600
 PROTO_VERSION = 1
@@ -162,6 +163,7 @@ class SerialController(Controller):
         return self._info
 
     def heartbeat(self) -> None:
+        super().heartbeat()
         self._check_open()
         self._renew()
 
@@ -170,7 +172,8 @@ class SerialController(Controller):
             return
         try:
             self.release_all()
-        except ControllerError:
+        except (ControllerError, EmergencyStop):
+            # After an emergency stop the release has already been sent.
             pass
         finally:
             # Whatever the release did, the heartbeat must stop: silence is
