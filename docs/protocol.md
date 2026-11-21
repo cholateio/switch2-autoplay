@@ -80,6 +80,7 @@ Button bits: Y `0x0001`, B `0x0002`, A `0x0004`, X `0x0008`, L `0x0010`, R `0x00
 - **PING** is the heartbeat. It changes nothing.
 - **SET_STATE** appends one state to the device's queue.
 - **RELEASE_ALL** empties the queue and makes the state neutral at once (no buttons, hat 8, sticks 128).
+  "At once" means the next report the device hands to USB is neutral. A report already waiting for the console's poll cannot be recalled, so the console may read one more report with the old state before the neutral one. The same holds for the watchdog.
 - **HELLO** starts a session: it does what RELEASE_ALL does and also forgets every remembered `seq`.
 
 ## Device to host
@@ -141,7 +142,9 @@ A SET_STATE whose `seq` is remembered is never queued a second time, whatever it
 - No ACK within 50 ms: the host sends the same frame again, up to 3 retransmissions.
 - No DONE when it was due: the host sends the same frame again. DONE means it finished; ACK means keep waiting; NAK reason 4 means it will never finish.
 
-The host sends one command at a time and waits for its immediate reply before sending the next. A `seq` must not be reused for a different SET_STATE while the device may still remember it; counting up by one per command, modulo 256, satisfies this. HELLO clears the memory.
+The host sends one command at a time and waits for its immediate reply before sending the next.
+
+A `seq` must not be reused for a different SET_STATE while the device may still remember it, that is, within 16 SET_STATE commands. Counting every command on one counter does **not** guarantee this: 255 PINGs between two SET_STATEs bring the same `seq` round again, and the device would answer DONE without showing the state. The Python host therefore numbers SET_STATE commands 0 to 127 in turn and every other command 128 to 255 in turn. The two ranges also keep a late reply to one kind of command from being taken for the reply to the other. HELLO clears the device's memory.
 
 RELEASE_ALL and HELLO may be retransmitted freely: repeating them changes nothing further.
 

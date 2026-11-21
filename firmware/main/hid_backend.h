@@ -16,9 +16,12 @@ bool hid_backend_mounted(void);
 
 // True when the host has configured the device, the IN endpoint is free and
 // the delivered callback for the previous report has been given its state.
+// Call it regularly: it is also what notices a report lost to a bus reset.
 bool hid_backend_ready(void);
 
-// Queue one input report; false if the backend is not ready.
+// Queue one input report; false if the backend is not ready. A queued report
+// cannot be recalled: the host reads it at its next poll, whatever is sent
+// after it.
 bool hid_backend_send(const pad_state_t *s);
 
 // The backend byte reported in INFO (docs/protocol.md): 1 = pokken.

@@ -4,7 +4,9 @@
 // (SwitchDescriptors.h); the endpoint interval is the original pad's 5 ms.
 #include "class/hid/hid_device.h"
 #include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
 #include "hid_backend.h"
+#include "hidslot.h"
 #include "tinyusb.h"
 #include "tinyusb_default_config.h"
 
@@ -102,12 +104,11 @@ static const char s_lang_id[] = {0x09, 0x04};
 static const char *s_strings[] = {s_lang_id, "HORI CO.,LTD.", "POKKEN CONTROLLER"};
 
 // TinyUSB frees the IN endpoint before it runs the completion callback, and
-// the callback's buffer is the one the next send writes into. So this file
-// keeps its own copy of the report in flight and refuses a new one until the
-// callback has taken that copy.
+// the callback's buffer is the one the next send writes into. So the slot
+// keeps this file's own copy of the report in flight and refuses a new one
+// until the callback has taken that copy.
 static portMUX_TYPE s_lock = portMUX_INITIALIZER_UNLOCKED;
-static bool s_in_flight;
-static pad_state_t s_in_flight_state;
+static hidslot_t s_slot;
 static pad_state_t s_last_sent = PAD_STATE_NEUTRAL;
 static void (*s_delivered_cb)(const pad_state_t *delivered);
 
@@ -123,26 +124,16 @@ static void encode_report(const pad_state_t *s, uint8_t out[REPORT_LEN])
     out[7] = 0;
 }
 
-static void clear_in_flight(void)
+static void cancel_in_flight(void)
 {
     portENTER_CRITICAL(&s_lock);
-    s_in_flight = false;
+    hidslot_cancel(&s_slot);
     portEXIT_CRITICAL(&s_lock);
-}
-
-// A bus reset or an unplug cancels the transfer in flight without a
-// completion callback; both end in one of these two events.
-static void on_usb_event(tinyusb_event_t *event, void *arg)
-{
-    (void)arg;
-    if (event->id == TINYUSB_EVENT_ATTACHED || event->id == TINYUSB_EVENT_DETACHED) {
-        clear_in_flight();
-    }
 }
 
 esp_err_t hid_backend_init(void)
 {
-    tinyusb_config_t cfg = TINYUSB_DEFAULT_CONFIG(on_usb_event);
+    tinyusb_config_t cfg = TINYUSB_DEFAULT_CONFIG();
     cfg.descriptor.device = &s_device_desc;
     cfg.descriptor.full_speed_config = s_config_desc;
     cfg.descriptor.string = s_strings;
@@ -157,10 +148,14 @@ bool hid_backend_mounted(void)
 
 bool hid_backend_ready(void)
 {
+    // A bus reset or an unplug drops the report in flight with no callback;
+    // polling the slot here is what notices that and frees it.
+    bool endpoint_free = tud_hid_ready();
+    uint32_t now_ms = pdTICKS_TO_MS(xTaskGetTickCount());
     portENTER_CRITICAL(&s_lock);
-    bool in_flight = s_in_flight;
+    bool slot_free = hidslot_free(&s_slot, endpoint_free, now_ms);
     portEXIT_CRITICAL(&s_lock);
-    return !in_flight && tud_hid_ready();
+    return slot_free && endpoint_free;
 }
 
 bool hid_backend_send(const pad_state_t *s)
@@ -169,20 +164,16 @@ bool hid_backend_send(const pad_state_t *s)
         return false;
     }
     portENTER_CRITICAL(&s_lock);
-    bool taken = !s_in_flight;
-    if (taken) {
-        s_in_flight = true;
-        s_in_flight_state = *s;
-    }
+    bool reserved = hidslot_reserve(&s_slot, s);
     portEXIT_CRITICAL(&s_lock);
-    if (!taken) {
+    if (!reserved) {
         return false;
     }
 
     uint8_t report[REPORT_LEN];
     encode_report(s, report);
     if (!tud_hid_report(0, report, sizeof(report))) {
-        clear_in_flight();
+        cancel_in_flight();
         return false;
     }
     portENTER_CRITICAL(&s_lock);
@@ -236,10 +227,9 @@ void tud_hid_report_complete_cb(uint8_t instance, uint8_t const *report, uint16_
 {
     (void)instance;
     (void)report;
+    pad_state_t delivered;
     portENTER_CRITICAL(&s_lock);
-    bool was_in_flight = s_in_flight;
-    pad_state_t delivered = s_in_flight_state;
-    s_in_flight = false;
+    bool was_in_flight = hidslot_complete(&s_slot, &delivered);
     portEXIT_CRITICAL(&s_lock);
     if (was_in_flight && len == REPORT_LEN && s_delivered_cb != NULL) {
         s_delivered_cb(&delivered);
@@ -253,6 +243,6 @@ void tud_hid_report_failed_cb(uint8_t instance, hid_report_type_t report_type, u
     (void)report;
     (void)xferred_bytes;
     if (report_type == HID_REPORT_TYPE_INPUT) {
-        clear_in_flight();
+        cancel_in_flight();
     }
 }
