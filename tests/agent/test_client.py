@@ -53,6 +53,11 @@ class FakeMessages:
 class FakeAnthropic:
     def __init__(self, **kwargs):
         self.messages = FakeMessages(**kwargs)
+        self.options = []
+
+    def with_options(self, **options):
+        self.options.append(options)
+        return self
 
 
 def test_request_shape_and_reply_mapping():
@@ -62,6 +67,7 @@ def test_request_shape_and_reply_mapping():
     messages = [{"role": "user", "content": "go"}]
     reply = model.send("SYSTEM", tools, messages)
     (request,) = api.messages.requests
+    assert api.options == [{"max_retries": 0}]
     assert request["model"] == "claude-opus-5-5"
     assert request["max_tokens"] == 8000
     assert request["output_config"] == {"effort": "medium"}

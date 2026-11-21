@@ -196,7 +196,7 @@ def _converse(
 
 def _log(session: Session, kind: str, **fields) -> None:
     """Log without letting a failing log change how the run ends."""
-    with contextlib.suppress(Exception):
+    with contextlib.suppress(Exception, KeyboardInterrupt):
         session.log.event(kind, **fields)
 
 
@@ -213,11 +213,11 @@ def _wind_down(session: Session, reason: str) -> tuple[str, str | None]:
             session.pad.release_all()
         except EmergencyStop:
             reason = ESTOP
-        except Exception as exc:  # noqa: BLE001
+        except (Exception, KeyboardInterrupt) as exc:  # noqa: BLE001
             _log(session, "release_failed", message=f"{type(exc).__name__}: {exc}")
     try:
         context = session.guard.context() or UNKNOWN
-    except Exception:  # noqa: BLE001
+    except (Exception, KeyboardInterrupt):  # noqa: BLE001
         context = None
     return reason, context
 

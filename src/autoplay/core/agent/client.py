@@ -53,7 +53,9 @@ class AnthropicModel:
 
     def send(self, system: str, tools: list[dict], messages: list[dict]) -> ModelReply:
         try:
-            response = self._client.messages.create(
+            # No retries: a request whose reply was lost may still be billed,
+            # and a second one would spend outside what the budget reserved.
+            response = self._client.with_options(max_retries=0).messages.create(
                 max_tokens=self._config.max_tokens,
                 **self._prompt(system, tools, messages),
             )

@@ -328,6 +328,19 @@ def test_keyboard_interrupt_still_releases_and_reports(tmp_path):
     assert events(session, "run_result")[0]["reason"] == "error"
 
 
+def test_interrupt_during_cleanup_does_not_hide_the_outcome(tmp_path):
+    class InterruptedRelease(FakeConsole):
+        def _release_all(self):
+            super()._release_all()
+            raise KeyboardInterrupt
+
+    session = make_session(tmp_path, pad_class=InterruptedRelease)
+    session.source.wait_next = lambda *a: (_ for _ in ()).throw(KeyboardInterrupt)
+    result = run_agent(session, "goal", FakeModel(["fine"]))
+    assert (result.reason, result.summary) == ("done", "fine")
+    assert events(session, "run_result")[0]["context"] is None
+
+
 def test_a_failing_cleanup_does_not_hide_the_outcome(tmp_path):
     class BadRelease(FakeConsole):
         def _release_all(self):
