@@ -18,9 +18,8 @@ PRICES: dict[str, Price] = {
     "claude-sonnet-5-5": Price(2.0, 10.0, 0.10, 2.5),
 }
 
-# How much larger than the last request's input the next one is assumed to be
-# at most, when reserving for it.
-INPUT_GROWTH = 1.5
+# The counted prompt size is an estimate; reserve this much more.
+COUNT_MARGIN = 1.05
 
 
 @dataclass(frozen=True)
@@ -43,21 +42,15 @@ def _price(model: str) -> Price:
         ) from None
 
 
-def input_cost_usd(model: str, usage: Usage) -> float:
+def cost_usd(model: str, usage: Usage) -> float:
+    """Raises ValueError for a model with no known price."""
     price = _price(model)
     return (
         usage.input_tokens * price.input
         + usage.cache_read_tokens * price.cache_read
         + usage.cache_write_tokens * price.cache_write
+        + usage.output_tokens * price.output
     ) / 1_000_000
-
-
-def cost_usd(model: str, usage: Usage) -> float:
-    """Raises ValueError for a model with no known price."""
-    return (
-        input_cost_usd(model, usage)
-        + usage.output_tokens * _price(model).output / 1_000_000
-    )
 
 
 class BudgetExceeded(RuntimeError):
@@ -66,33 +59,38 @@ class BudgetExceeded(RuntimeError):
 
 class Budget:
     """The spending limits of one run. `reserve()` goes before every model
-    call and `add()` after it; as long as no call costs more than what was
-    reserved for it, `spent_usd` never passes `max_usd`."""
+    call and `add()` after it. A call is only made when its worst case fits:
+    the whole prompt billed at the dearest input rate plus a full-length
+    reply, so `spent_usd` does not pass `max_usd`."""
 
     def __init__(
         self, model: str, max_usd: float, max_calls: int, max_tokens: int
     ) -> None:
-        self._output_reserve = max_tokens * _price(model).output / 1_000_000
+        self._price = _price(model)
         self.model = model
         self.max_usd = max_usd
         self.max_calls = max_calls
+        self.max_tokens = max_tokens
         self.spent_usd = 0.0
         self.calls = 0
-        self._last_input_usd = 0.0
 
-    def worst_case_usd(self) -> float:
-        """What the next call is assumed to cost at most: a full-length reply,
-        plus the last call's input grown by INPUT_GROWTH. The first call has no
-        last input to go by, so its prompt is not covered."""
-        return self._output_reserve + self._last_input_usd * INPUT_GROWTH
+    def worst_case_usd(self, input_tokens: int) -> float:
+        """The most a call with a prompt counted at `input_tokens` can cost."""
+        dearest = max(
+            self._price.input, self._price.cache_read, self._price.cache_write
+        )
+        return (
+            input_tokens * COUNT_MARGIN * dearest + self.max_tokens * self._price.output
+        ) / 1_000_000
 
-    def reserve(self) -> None:
-        """Raise BudgetExceeded, naming the limit, unless one more call fits."""
+    def reserve(self, input_tokens: int) -> None:
+        """Raise BudgetExceeded, naming the limit, unless a call whose prompt
+        was counted at `input_tokens` fits."""
         if self.calls >= self.max_calls:
             raise BudgetExceeded(
                 f"the limit of {self.max_calls} model calls is reached"
             )
-        worst = self.worst_case_usd()
+        worst = self.worst_case_usd(input_tokens)
         if self.spent_usd + worst > self.max_usd:
             raise BudgetExceeded(
                 f"US${self.spent_usd:.4f} spent; one more call could cost "
@@ -104,5 +102,4 @@ class Budget:
         cost = cost_usd(self.model, usage)
         self.spent_usd += cost
         self.calls += 1
-        self._last_input_usd = input_cost_usd(self.model, usage)
         return cost

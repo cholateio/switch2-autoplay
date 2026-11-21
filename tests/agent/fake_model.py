@@ -21,12 +21,20 @@ class FakeModel:
     (tool name, input) calls, a string for a turn of plain text, or a ready
     ModelReply. `sent` keeps a copy of the conversation as each call saw it."""
 
-    def __init__(self, script, usage: Usage | None = None) -> None:
+    def __init__(
+        self, script, usage: Usage | None = None, prompt_tokens: int = 1000
+    ) -> None:
+        self.prompt_tokens = prompt_tokens
+        self.counted = 0
         self.script = list(script)
         self.usage = usage or Usage(1000, 100, 0, 0)
         self.sent: list[list[dict]] = []
         self.systems: list[str] = []
         self.tools: list[list[dict]] = []
+
+    def count_tokens(self, system, tools, messages) -> int:
+        self.counted += 1
+        return self.prompt_tokens
 
     def send(self, system, tools, messages) -> ModelReply:
         self.systems.append(system)

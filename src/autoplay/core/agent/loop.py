@@ -1,3 +1,4 @@
+import contextlib
 from dataclasses import dataclass
 from typing import Protocol
 
@@ -5,8 +6,7 @@ from autoplay.core import clock
 from autoplay.core.agent.budget import BudgetExceeded, Usage
 from autoplay.core.agent.session import Session
 from autoplay.core.agent.tools import FINISH, UNKNOWN, Tool, ToolOutput, build_tools
-from autoplay.core.capture.base import CaptureError
-from autoplay.core.controller.base import BUTTON_NAMES, ControllerError
+from autoplay.core.controller.base import BUTTON_NAMES
 from autoplay.core.runtime.estop import EmergencyStop
 
 DONE, BUDGET, ESTOP, ERROR = "done", "budget", "estop", "error"
@@ -48,6 +48,11 @@ class ModelError(RuntimeError):
 
 
 class ModelClient(Protocol):
+    def count_tokens(self, system: str, tools: list[dict], messages: list[dict]) -> int:
+        """Return the size in tokens of the prompt `send` would send; raise
+        ModelError when it cannot be counted."""
+        ...
+
     def send(self, system: str, tools: list[dict], messages: list[dict]) -> ModelReply:
         """Send the whole conversation and return the next turn; raise
         ModelError when no turn comes back."""
@@ -142,7 +147,8 @@ def _converse(
     messages: list[dict] = [{"role": "user", "content": _first_message(session, goal)}]
     while True:
         _check_stop(session)
-        session.budget.reserve()
+        # The whole prompt is counted, so the reserve is a bound and not a guess.
+        session.budget.reserve(client.count_tokens(system, definitions, messages))
         started = clock.now()
         reply = client.send(system, definitions, messages)
         usd = session.budget.add(reply.usage)
@@ -160,10 +166,11 @@ def _converse(
         messages.append({"role": "assistant", "content": reply.content})
         if reply.stop_reason == "refusal":
             return ERROR, f"the model refused (category: {reply.refusal_category})"
-        if reply.stop_reason == "max_tokens":
-            return ERROR, "the model's reply was cut off at max_tokens"
-        if not reply.tool_calls:
+        if reply.stop_reason == "end_turn" and not reply.tool_calls:
             return DONE, reply.text
+        if reply.stop_reason != "tool_use" or not reply.tool_calls:
+            # max_tokens, a full context window, a pause: the turn is not whole.
+            return ERROR, f"the model's turn ended early ({reply.stop_reason})"
         results = []
         for call in reply.tool_calls:
             _check_stop(session)
@@ -187,9 +194,16 @@ def _converse(
         messages.append({"role": "user", "content": results})
 
 
+def _log(session: Session, kind: str, **fields) -> None:
+    """Log without letting a failing log change how the run ends."""
+    with contextlib.suppress(Exception):
+        session.log.event(kind, **fields)
+
+
 def _wind_down(session: Session, reason: str) -> tuple[str, str | None]:
     """Release the gamepad and read the context the game was left in. Returns
-    the reason, changed to "estop" if the stop tripped meanwhile."""
+    the reason, changed to "estop" if the stop tripped meanwhile. Nothing in
+    here raises: a failure to release or to look must not hide the outcome."""
     if session.estop.tripped.is_set():
         # release_all() refuses after a trip; the stop's own callback has
         # released, or with the link gone the firmware watchdog does.
@@ -199,11 +213,11 @@ def _wind_down(session: Session, reason: str) -> tuple[str, str | None]:
             session.pad.release_all()
         except EmergencyStop:
             reason = ESTOP
-        except ControllerError as exc:
-            session.log.event("release_failed", message=str(exc))
+        except Exception as exc:  # noqa: BLE001
+            _log(session, "release_failed", message=f"{type(exc).__name__}: {exc}")
     try:
         context = session.guard.context() or UNKNOWN
-    except CaptureError:
+    except Exception:  # noqa: BLE001
         context = None
     return reason, context
 
@@ -213,8 +227,8 @@ def run_agent(
 ) -> RunResult:
     """Let the model pursue `goal` with the session's tools until it finishes,
     a limit is reached, the emergency stop trips or something breaks. However
-    the run ends, the gamepad is released and a `run_result` event is logged;
-    nothing is raised."""
+    the run ends, Ctrl+C included, the gamepad is released and a `run_result`
+    event is logged; nothing is raised."""
     reason, summary = ERROR, ""
     try:
         if client is None:
@@ -228,11 +242,15 @@ def run_agent(
         reason, summary = ESTOP, "the emergency stop was tripped"
     except BudgetExceeded as exc:
         reason, summary = BUDGET, str(exc)
+    except KeyboardInterrupt:
+        reason, summary = ERROR, "interrupted from the keyboard"
     except Exception as exc:  # noqa: BLE001 - the run boundary: report, never raise
         reason, summary = ERROR, f"{type(exc).__name__}: {exc}"
-    reason, context = _wind_down(session, reason)
+    finally:
+        reason, context = _wind_down(session, reason)
     result = RunResult(reason, summary, session.budget.calls, session.budget.spent_usd)
-    session.log.event(
+    _log(
+        session,
         "run_result",
         reason=reason,
         goal=goal,

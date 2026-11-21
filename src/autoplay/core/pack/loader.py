@@ -83,15 +83,23 @@ def _buttons(source: Path, context: str, raw: object) -> frozenset[str]:
     return frozenset(raw)
 
 
-def _load_states(path: Path) -> StateRegistry:
+def _load_states(root: Path, path: Path) -> StateRegistry:
     try:
         for entry in read_states_entries(path):
             template = entry.get("template")
-            if isinstance(template, str) and not (path.parent / template).is_file():
+            if not isinstance(template, str):
+                continue
+            target = path.parent / template
+            if not target.resolve().is_relative_to(root.resolve()):
                 raise PackError(
-                    f"{path}: state {entry['name']!r} needs {path.parent / template}, "
-                    "which is missing; templates are local only (they are cut from "
-                    "game screenshots and never committed). Rebuild them with "
+                    f"{path}: state {entry['name']!r} template {template!r} is "
+                    "outside the pack"
+                )
+            if not target.is_file():
+                raise PackError(
+                    f"{path}: state {entry['name']!r} needs {target}, which is "
+                    "missing; templates are local only (they are cut from game "
+                    "screenshots and never committed). Rebuild them with "
                     "`ap template`, see docs/DEVELOPMENT.md."
                 )
         return load_states_file(path)
@@ -164,7 +172,7 @@ def load_pack(path: Path) -> GamePack:
         chapters[chapter] = chapter_path
         summaries[chapter] = entry["summary"]
 
-    states = _load_states(_inside(root, data["states_file"], "states_file"))
+    states = _load_states(root, _inside(root, data["states_file"], "states_file"))
     contexts = states.names
     if home not in contexts:
         raise PackError(

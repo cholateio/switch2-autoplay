@@ -163,7 +163,7 @@ for button in ('PLUS', 'MINUS', 'HOME', 'CAPTURE'):
 
 `model_call` events hold the four token counts, the cost in US dollars, the latency and the stop reason; `run_result` holds how the run ended.
 
-**Cost.** Prices per model are in `core/agent/budget.py`, with the date they were checked. Before each model call the budget reserves a full-length reply plus the last input grown by half, and stops the run (`reason=budget`, exit code 4) when that no longer fits. Server-side fallbacks are not used.
+**Cost.** Prices per model are in `core/agent/budget.py`, with the date they were checked. Before each model call the prompt is counted with the token-counting endpoint, and the budget reserves that prompt at the dearest input rate plus a full-length reply; it stops the run (`reason=budget`, exit code 4) when that no longer fits. Server-side fallbacks are not used.
 
 ## M1 acceptance (2026-11-21)
 

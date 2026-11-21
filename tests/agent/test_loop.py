@@ -285,12 +285,73 @@ def test_stick_and_wait(tmp_path):
     assert payload(model.results(3)[0]) == {"waited_ms": 20, "context": "explore"}
 
 
-def test_refusal_and_cut_off_reply_end_the_run_as_errors(tmp_path):
-    for stop_reason, expected in (("refusal", "cyber"), ("max_tokens", "cut off")):
+def test_only_a_natural_end_counts_as_done(tmp_path):
+    cases = {
+        "refusal": "cyber",
+        "max_tokens": "max_tokens",
+        "model_context_window_exceeded": "model_context_window_exceeded",
+        "pause_turn": "pause_turn",
+        "stop_sequence": "stop_sequence",
+    }
+    for stop_reason, expected in cases.items():
         session = make_session(tmp_path / stop_reason)
-        reply = ModelReply([], [], "", stop_reason, Usage(10, 10), "cyber")
+        reply = ModelReply(
+            [{"type": "text", "text": "half a"}],
+            [],
+            "half a",
+            stop_reason,
+            Usage(10, 10),
+            "cyber",
+        )
         result = run_agent(session, "goal", FakeModel([reply]))
         assert result.reason == "error" and expected in result.summary
+
+
+def test_large_prompt_is_refused_before_it_is_sent(tmp_path):
+    session = make_session(tmp_path, max_usd=0.20)
+    model = FakeModel([[("look", {})]], prompt_tokens=100_000)
+    result = run_agent(session, "goal", model)
+    assert (result.reason, result.model_calls, result.usd) == ("budget", 0, 0.0)
+    assert model.counted == 1 and model.sent == []
+
+
+def test_keyboard_interrupt_still_releases_and_reports(tmp_path):
+    class Interrupted(FakeModel):
+        def send(self, system, tools, messages):
+            raise KeyboardInterrupt
+
+    session = make_session(tmp_path)
+    session.pad.hold("B")
+    result = run_agent(session, "goal", Interrupted([]))
+    assert result.reason == "error" and "interrupted" in result.summary
+    assert session.pad.release_all_calls == 1 and session.pad.state == PadState()
+    assert events(session, "run_result")[0]["reason"] == "error"
+
+
+def test_a_failing_cleanup_does_not_hide_the_outcome(tmp_path):
+    class BadRelease(FakeConsole):
+        def _release_all(self):
+            super()._release_all()
+            raise ControllerError("the port is gone")
+
+    session = make_session(tmp_path / "a", pad_class=BadRelease)
+    result = run_agent(session, "goal", FakeModel([[("finish", {"summary": "ok"})]]))
+    assert (result.reason, result.summary) == ("done", "ok")
+    assert events(session, "release_failed")
+
+    session = make_session(tmp_path / "b")
+    model = FakeModel([[("finish", {"summary": "ok"})]])
+    original = model.send
+
+    def send_then_break_the_log(system, tools, messages):
+        reply = original(system, tools, messages)
+        session.log.close()
+        session.source.stalled = True
+        return reply
+
+    model.send = send_then_break_the_log
+    result = run_agent(session, "goal", model)
+    assert result.reason == "error" and session.pad.release_all_calls == 1
 
 
 def test_model_and_hardware_failures_end_the_run_as_errors(tmp_path):

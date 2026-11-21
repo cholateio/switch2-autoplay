@@ -28,24 +28,34 @@ class AnthropicModel:
         except anthropic.AnthropicError as exc:
             raise ModelError(f"cannot set up the model client: {exc}") from exc
 
+    def _prompt(self, system: str, tools: list[dict], messages: list[dict]) -> dict:
+        return {
+            "model": self._config.model,
+            # One breakpoint after tools and system, which never change in a
+            # run; the top-level one follows the end of the conversation.
+            "system": [
+                {"type": "text", "text": system, "cache_control": {"type": "ephemeral"}}
+            ],
+            "tools": tools,
+            "messages": messages,
+            "output_config": {"effort": self._config.effort},
+            "cache_control": {"type": "ephemeral"},
+        }
+
+    def count_tokens(self, system: str, tools: list[dict], messages: list[dict]) -> int:
+        try:
+            counted = self._client.messages.count_tokens(
+                **self._prompt(system, tools, messages)
+            )
+        except anthropic.APIError as exc:
+            raise ModelError(f"{type(exc).__name__}: {exc}") from exc
+        return counted.input_tokens
+
     def send(self, system: str, tools: list[dict], messages: list[dict]) -> ModelReply:
         try:
             response = self._client.messages.create(
-                model=self._config.model,
                 max_tokens=self._config.max_tokens,
-                # One breakpoint after tools and system, which never change in
-                # a run; the top-level one follows the end of the conversation.
-                system=[
-                    {
-                        "type": "text",
-                        "text": system,
-                        "cache_control": {"type": "ephemeral"},
-                    }
-                ],
-                tools=tools,
-                messages=messages,
-                output_config={"effort": self._config.effort},
-                cache_control={"type": "ephemeral"},
+                **self._prompt(system, tools, messages),
             )
         except anthropic.APIError as exc:
             raise ModelError(f"{type(exc).__name__}: {exc}") from exc

@@ -130,3 +130,13 @@ def test_bad_states_file_is_a_pack_error(tmp_path):
     (root / "states.yaml").write_text("states: 3\n", "utf-8")
     with pytest.raises(PackError, match="states.yaml"):
         load_pack(root)
+
+
+def test_template_outside_the_pack(tmp_path):
+    root = write_pack(tmp_path / "p")
+    (root / "templates" / "bag.png").rename(tmp_path / "private.png")
+    states = yaml.safe_load((root / "states.yaml").read_text("utf-8"))
+    states["states"][1]["template"] = "../private.png"
+    (root / "states.yaml").write_text(yaml.safe_dump(states), "utf-8")
+    with pytest.raises(PackError, match="outside the pack"):
+        load_pack(root)

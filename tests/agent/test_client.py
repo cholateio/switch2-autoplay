@@ -1,6 +1,6 @@
 import anthropic
 import pytest
-from anthropic.types import Message
+from anthropic.types import Message, MessageTokensCount
 
 from autoplay.core.agent.budget import Usage
 from autoplay.core.agent.client import AnthropicModel
@@ -35,6 +35,13 @@ RESPONSE = {
 class FakeMessages:
     def __init__(self, response=None, error=None):
         self.response, self.error, self.requests = response, error, []
+        self.counts = []
+
+    def count_tokens(self, **kwargs):
+        self.counts.append(kwargs)
+        if self.error is not None:
+            raise self.error
+        return MessageTokensCount(input_tokens=4321)
 
     def create(self, **kwargs):
         self.requests.append(kwargs)
@@ -94,3 +101,20 @@ def test_api_error_becomes_a_model_error():
     api = FakeAnthropic(error=Unreachable())
     with pytest.raises(ModelError, match="Unreachable: connection error"):
         AnthropicModel(load_agent_config(), client=api).send("s", [], [])
+
+
+def test_count_tokens_counts_the_prompt_that_send_sends():
+    api = FakeAnthropic(response=Message.model_validate(RESPONSE))
+    model = AnthropicModel(load_agent_config(), client=api)
+    tools, messages = [{"name": "t"}], [{"role": "user", "content": "go"}]
+    assert model.count_tokens("SYSTEM", tools, messages) == 4321
+    model.send("SYSTEM", tools, messages)
+    (counted,), (sent,) = api.messages.counts, api.messages.requests
+    assert "max_tokens" not in counted
+    assert counted == {k: v for k, v in sent.items() if k != "max_tokens"}
+
+
+def test_count_error_becomes_a_model_error():
+    api = FakeAnthropic(error=Unreachable())
+    with pytest.raises(ModelError, match="Unreachable"):
+        AnthropicModel(load_agent_config(), client=api).count_tokens("s", [], [])
