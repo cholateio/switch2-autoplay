@@ -139,7 +139,9 @@ def test_a_stopped_routine_names_its_step(tmp_path):
     assert result["is_error"]
     said = payload(result)
     assert (said["stopped_at"], said["reason"]) == ("break 2", "no outline seen")
-    assert said["context_after"] == "explore" and len(pictures(result)) == 1
+    # An error result holds text only: the API refuses anything else in one.
+    assert said["context_after"] == "explore" and pictures(result) == []
+    assert all(part["type"] == "text" for part in result["content"])
 
 
 def test_a_refused_input_inside_a_routine_stops_it(tmp_path):

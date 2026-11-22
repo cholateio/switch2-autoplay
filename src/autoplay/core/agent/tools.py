@@ -229,7 +229,8 @@ class _Toolbox:
 
     def routine(self, routine: Routine, args: dict) -> ToolOutput:
         """Run a pack routine. It reports text and one picture; a routine that
-        stops, or meets a refused input, is an error result naming the step.
+        stops, or meets a refused input, is an error result naming the step,
+        text only.
         Whatever else it raises ends the run, with the gamepad released."""
         kwargs = routine.check_args(args)
         s = self.s
@@ -257,6 +258,11 @@ class _Toolbox:
     def _routine_output(self, is_error: bool, **what) -> ToolOutput:
         _, settled = self._settle()
         context = self.s.guard.context()
+        if is_error:
+            # The API accepts only text in a tool result that reports an
+            # error (a 400 on 2026-11-23); the model looks for itself.
+            said = _say(**what, context_after=context or UNKNOWN, settled=settled)
+            return ToolOutput([said], True)
         return ToolOutput(
             [
                 _say(**what, context_after=context or UNKNOWN, settled=settled),
@@ -514,7 +520,8 @@ def build_tools(session: Session) -> list[Tool]:
                 (
                     f"Routine of this game: {routine.description} It checks the picture "
                     "at its own steps and reports the result with one screenshot; if "
-                    "it stops, it says at which step and why."
+                    "it stops, it says at which step and why, without a screenshot: "
+                    "call look."
                 ),
                 _schema({key: param.schema() for key, param in routine.params.items()}),
                 lambda args, routine=routine: box.routine(routine, args),

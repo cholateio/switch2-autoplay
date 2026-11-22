@@ -164,3 +164,22 @@ def test_the_routines_file_loads_and_names_what_the_guide_names():
         "leave",
     }
     assert routines["leave"].params == {}
+
+
+def bag_with_count(text: str) -> np.ndarray:
+    frame = bag(4, (1, 4))
+    x, y = checks.BAG_COLUMNS[3], checks.BAG_ROWS[0]
+    cv2.putText(
+        frame, text, (x + 16, y + 52), cv2.FONT_HERSHEY_SIMPLEX, 0.9, (90, 90, 90), 2
+    )
+    return frame
+
+
+def test_the_count_beside_a_cell_tells_same_from_changed_without_reading_it():
+    cell = (1, 4)
+    ninety_nine = checks.count_mark(bag_with_count("99"), cell)
+    again = checks.count_mark(bag_with_count("99"), cell)
+    ninety_eight = checks.count_mark(bag_with_count("98"), cell)
+    assert ninety_nine.any()
+    assert checks.same_count(ninety_nine, again)
+    assert not checks.same_count(ninety_nine, ninety_eight)

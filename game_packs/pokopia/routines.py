@@ -162,8 +162,9 @@ def _in_hand(hands, frame) -> str | None:
     "the next, and so on. direction e is screen right, w screen left. Needs an "
     "item in hand, the character facing away from the camera, quantity 1, and "
     "the camera square to the grid (a row of blocks looks level on screen). Sets "
-    "the mid view. Each block is confirmed on the picture; if one cannot be "
-    "confirmed the routine stops without pressing again. "
+    "the mid view. Each block is confirmed on the picture; when the picture "
+    "does not show it, the count in the bag decides, and only a press that "
+    "placed nothing is repeated, once. "
     "Called again at the end of a line, in the other direction, it puts the "
     "next layer on top (up to layer 2 from the ground; rise first for more).",
     direction=Param(str, choices=("e", "w")),
@@ -171,8 +172,24 @@ def _in_hand(hands, frame) -> str | None:
 )
 def place_line(hands, direction, count):
     _pitch(hands, PITCH["mid"])
-    placed = _line(hands, direction, count)
+    placed = _line(hands, direction, count, _start_count(hands))
     return f"placed {placed} going {direction}; now in front of the last one"
+
+
+def _count_mark(hands):
+    """With an item in hand: open the bag (its cursor is on that item), take
+    the picture of its count, and take the item again."""
+    _open_bag(hands)
+    frame = hands.frame()
+    cell = checks.bag_cursor(frame)
+    if cell is None:
+        raise RoutineStopped("cannot find the bag cursor", step="check the count")
+    mark = checks.count_mark(frame, cell)
+    hands.press("A")
+    hands.wait(1000)
+    if hands.context() == "bag":
+        raise RoutineStopped("the item was not taken out again", step="check the count")
+    return mark
 
 
 def _still(hands):
@@ -189,41 +206,65 @@ def _still(hands):
     return last
 
 
-def _line(hands, direction: str, count: int) -> int:
+def _line(hands, direction: str, count: int, count_seen: list) -> int:
+    """`count_seen` holds the picture of the item's count in the bag as last
+    seen; it settles what the picture in front of the character leaves open."""
     dx = 1.0 if direction == "e" else -1.0
     placed = 0
     for block in range(1, count + 1):
         if block > 1:
             hands.combo("ZL", STEP_MS, stick=("L", dx, 0.0))
             hands.wait(500)
-        before = _still(hands)
-        hand = _in_hand(hands, before)
-        if hand != "one" and hand != "human":
-            why = (
-                "the quantity is not 1: press DPAD_UP until the prompt reads 1"
-                if hand == "many"
-                else "nothing is in hand"
-            )
-            raise RoutineStopped(f"{why}; {placed} placed", step=f"block {block}")
-        hands.press("A")
-        hands.wait(1300)
-        change = checks.changed_fraction(before, hands.frame())
-        if change < PLACED:
-            # A block that lands late: look once more before deciding.
-            hands.wait(700)
+        for attempt in (1, 2):
+            before = _still(hands)
+            hand = _in_hand(hands, before)
+            if hand != "one" and hand != "human":
+                why = (
+                    "the quantity is not 1: press DPAD_UP until the prompt reads 1"
+                    if hand == "many"
+                    else "nothing is in hand"
+                )
+                raise RoutineStopped(f"{why}; {placed} placed", step=f"block {block}")
+            hands.press("A")
+            hands.wait(1300)
             change = checks.changed_fraction(before, hands.frame())
-        hands.log(routine="place_line", block=block, change=round(change, 3))
-        if change < PLACED:
-            # No second press here. On 2026-11-23 a block that was placed read
-            # 0.028, a retry put another on top of it, and the count was off.
+            if change < PLACED:
+                # A block that lands late: look once more before deciding.
+                hands.wait(700)
+                change = checks.changed_fraction(before, hands.frame())
+            seen = change >= PLACED
+            counted = None
+            if not seen:
+                # The picture misses a block when the character is not in the
+                # middle of the screen (0.012 to 0.028 for blocks that were
+                # placed). The count in the bag decides; only if it did not
+                # change is a second press safe.
+                mark = _count_mark(hands)
+                counted = not checks.same_count(mark, count_seen[0])
+                count_seen[0] = mark
+            hands.log(
+                routine="place_line",
+                block=block,
+                attempt=attempt,
+                change=round(change, 3),
+                counted=counted,
+            )
+            if seen or counted:
+                break
+        else:
             raise RoutineStopped(
-                f"A was pressed but no block was seen to appear (picture change "
-                f"{change:.3f}); {placed} confirmed in this line. It may still have "
-                "been placed: look, and check the count in the bag, before placing more",
+                f"two presses placed nothing (the count in the bag did not change); "
+                f"{placed} placed in this line. The cell may be out of reach at this height",
                 step=f"block {block}",
             )
         placed += 1
     return placed
+
+
+def _start_count(hands) -> list:
+    if _in_hand(hands, hands.frame()) is None:
+        raise RoutineStopped("nothing is in hand", step="start")
+    return [_count_mark(hands)]
 
 
 @routine(
@@ -243,13 +284,14 @@ def place_wall(hands, width, layers):
             step="start",
         )
     _pitch(hands, PITCH["mid"])
+    count_seen = _start_count(hands)
     done = 0
     for layer in range(1, layers + 1):
         if layer > 2:
             hands.press("B", RISE_MS)
             hands.wait(500)
         try:
-            done += _line(hands, "e" if layer % 2 else "w", width)
+            done += _line(hands, "e" if layer % 2 else "w", width, count_seen)
         except RoutineStopped as stop:
             raise RoutineStopped(
                 f"{stop}; {done} placed in the layers before",

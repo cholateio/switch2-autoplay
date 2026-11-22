@@ -238,12 +238,12 @@ Run by the model on the console, at night in the game, with `ap play` and the Po
 
 | Check | Result |
 | --- | --- |
-| A row of 5 blocks placed, each confirmed on the picture, then removed | done in 21 model calls, US$0.685; 5 breaks, each after a passed check |
+| A row of 5 blocks placed, each confirmed on the picture, then removed | done in 21 model calls, US$0.685; 5 breaks, each after a passed check. Again on the final code, after the review fixes: 9 calls, US$0.268, bag 99 before and after |
 | A 3×2 wall built and taken down | done in 7 model calls, US$0.181 (2026-11-22, input by input: 70 calls, US$1.81) |
 | No `Y` without a passed check | 12 `Y` in 6 runs, all inside a routine after its check passed; PLUS, MINUS, HOME, CAPTURE never sent |
 | A run stopped by its budget while transformed | ended in `explore`, human form (`on_stop`: "human form again") |
 | `A` on a choice list | refused without `confirm`, sent with `confirm: "沒什麼"` |
-| 6 model runs in all | 61 calls, US$1.51; two ended in an API error before the thinking setting was right |
+| 8 model runs in all | 73 calls, US$1.85; three ended in an API error (two before the thinking setting was right, one on a picture inside an error result) |
 
 What was measured on the way, and is in the routines as constants:
 
@@ -251,7 +251,8 @@ What was measured on the way, and is in the routines as constants:
 - **Prompts are matched on their white lettering only**, anywhere in the prompt row: the same prompt 0.91 to 1.0, a different one at most 0.67, in night frames and in 21 daytime frames from 2026-11-22. Threshold 0.85.
 - **The pick-up note is matched by its "×" only.** The count goes up when breaks follow each other (×2, ×3) and the colour behind the note changes; matching the whole note failed on both.
 - **Changes after the review** (2026-11-23): no second press when a placement is not seen; a button that any context forbids or wants confirmed cannot be the held button of a combo; the eat prompt is checked before every berry (with the follower beside the character the game offers "A 看看這個！" instead, and A would hand the berry over); the budget says its bound rests on the counted prompt size and logs `budget_overrun`; a closed output stream is replaced by a sink.
-- **The placement check can miss a block that was placed** when the character is not in the middle of the picture (after sideways moves the camera does not always follow): 2 misses in about 45 placements, read 0.028 and 0.017. The routine then stops and says so; the bag count settles it.
+- **The picture alone misses placed blocks** when the character is not in the middle of the screen (after steps to the west the camera does not follow): such blocks read 0.005 to 0.028. So when the picture does not show a block, the routine opens the bag, compares the picture of the item's count with the one it took before (no digits are read; the same number gives the same pixels), and takes the item again. Count changed: placed. Count unchanged: nothing was placed, and only then is A pressed once more. In the last model run 3 of 5 blocks were settled this way and the row came out right.
+- **A tool result that reports an error may hold text only**; a stopped routine sent its screenshot along and the API answered 400. It reports text now and the model calls `look`.
 - **`require`.** `InputGuard.press(..., require=predicate)` sends only if the predicate holds on the two frames the context was read from and then on the newest frame, fetched and judged immediately before the send. The Y of a break and the A of eating go through it. Three review rounds were about this gap; what cannot be seen is a change during the last predicate call and on the way to the device.
 - **Not checked in daylight:** the placement threshold, the note, the "PP full" note, the confirmation question, eating. The `dialog` context itself is not recognised at night (the run above saw `unknown` during the dialogue).
 

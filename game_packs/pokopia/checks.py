@@ -138,6 +138,23 @@ def changed_fraction(
     return float((diff > 40).mean())
 
 
+def count_mark(bgr: np.ndarray, cell: tuple[int, int]) -> np.ndarray:
+    """The dark lettering of the count beside the bag cell (row, column), as a
+    mask. Two marks of the same cell tell whether the count changed; nothing
+    here reads the digits."""
+    row, column = cell
+    x, y = BAG_COLUMNS[column - 1], BAG_ROWS[row - 1]
+    gray = cv2.cvtColor(bgr[y + 8 : y + 62, x + 10 : x + 80], cv2.COLOR_BGR2GRAY)
+    return (gray < 150).astype(np.uint8)
+
+
+def same_count(a: np.ndarray, b: np.ndarray) -> bool:
+    """Whether two count marks show the same number. The bag is a still
+    picture: the same number gives the same mask to the pixel, and 99 against
+    95 differed in 84 pixels."""
+    return int((a != b).sum()) < 4
+
+
 def bag_page(bgr: np.ndarray) -> int | None:
     """The page the bag shows, 1 to 4: the dot drawn as an orange ring."""
     hsv = cv2.cvtColor(bgr, cv2.COLOR_BGR2HSV)
