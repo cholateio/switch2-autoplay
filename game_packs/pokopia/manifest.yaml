@@ -7,7 +7,7 @@ guide:
     - {name: main-menu, file: guide/main-menu.md, summary: "主選單的項目與離開方法"}
     - {name: dialog, file: guide/dialog.md, summary: "和寶可夢對話、選項、怎麼結束"}
     - {name: moves, file: guide/moves.md, summary: "招式的選擇、用途與 PP"}
-    - {name: placement, file: guide/placement.md, summary: "放方塊的固定做法（人形與電磁飄浮）、轉角、屋簷、拆除、PP；先讀 camera"}
+    - {name: placement, file: guide/placement.md, summary: "放方塊的固定做法（人形與電磁飄浮）、轉角、屋簷、一次放多塊、掛壁飾、拆除、PP；先讀 camera"}
     - {name: camera, file: guide/camera.md, summary: "施工視角的固定做法、鏡頭數值、拍照模式怎麼離開；擺放或破壞前必讀"}
 states_file: states.yaml
 forbidden:
