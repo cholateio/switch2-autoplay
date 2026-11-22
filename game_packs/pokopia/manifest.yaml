@@ -1,0 +1,17 @@
+name: pokopia
+home_context: explore
+guide:
+  core: guide/core.md
+  chapters:
+    - {name: bag, file: guide/bag.md, summary: "背包與收納箱的按鍵、怎麼讀道具"}
+    - {name: main-menu, file: guide/main-menu.md, summary: "主選單的項目與離開方法"}
+    - {name: dialog, file: guide/dialog.md, summary: "和寶可夢對話、選項、怎麼結束"}
+    - {name: moves, file: guide/moves.md, summary: "招式的選擇、用途與 PP"}
+    - {name: placement, file: guide/placement.md, summary: "擺放家具與方塊（尚未驗證）"}
+    - {name: camera, file: guide/camera.md, summary: "鏡頭控制與誤入拍照模式時怎麼離開"}
+states_file: states.yaml
+forbidden:
+  "*": [HOME, CAPTURE]
+  bag: [PLUS]
+  storage: [PLUS]
+  main_menu: [MINUS]
