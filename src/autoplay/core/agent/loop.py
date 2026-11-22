@@ -42,6 +42,8 @@ class ModelReply:
     stop_reason: str
     usage: Usage
     refusal_category: str | None = None
+    # Thinking blocks of earlier turns the API left out of this call.
+    dropped_thinking: int = 0
 
 
 class ModelError(RuntimeError):
@@ -154,8 +156,9 @@ DROPPED = "[screenshot dropped]"
 def trim_pictures(messages: list[dict], keep: int) -> int:
     """Once more than `2 * keep` screenshots sit in the tool results, replace
     all but the newest `keep` with a line of text, in place; return how many
-    were replaced. Assistant turns are never touched: they must come back to
-    the model unchanged."""
+    were replaced. Assistant turns are never touched. This is still an edit of
+    what the model was sent: the client asks the API to leave out the thinking
+    blocks made before it (see client.THINKING), so it is done in batches."""
     spots = [
         (block["content"], index)
         for message in messages
@@ -199,6 +202,7 @@ def _converse(
             usd=round(usd, 6),
             seconds=round(clock.now() - started, 3),
             stop_reason=reply.stop_reason,
+            dropped_thinking=reply.dropped_thinking,
             text=reply.text[:_LOGGED_TEXT],
         )
         messages.append({"role": "assistant", "content": reply.content})

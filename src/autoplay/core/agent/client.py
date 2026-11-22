@@ -5,13 +5,23 @@ from autoplay.core.agent.config import AgentConfig
 from autoplay.core.agent.loop import ModelError, ModelReply, ToolCall
 
 REQUEST_TIMEOUT_S = 180.0
+# The loop replaces old screenshots with a line of text, which is an edit of
+# the history. A thinking block is bound to the conversation it was made in,
+# and by default a request that replays one after such an edit is refused.
+# With this setting the API leaves those blocks out instead; the model loses
+# that earlier reasoning, which is the accepted price of the smaller history.
+BINDING_BETA = "thinking-binding-controls-2026-08-01"
+THINKING = {
+    "type": "adaptive",
+    "block_binding": {"prefix_mismatch_behavior": "drop_block"},
+}
 
 
 class AnthropicModel:
     """The model behind the Anthropic Messages API.
 
-    The request never sets `thinking`, `temperature` or `tool_choice`, which
-    the configured models reject or ignore, nor server-side fallbacks: a reply
+    The request never sets `temperature` or `tool_choice`, which the
+    configured models reject or ignore, nor server-side fallbacks: a reply
     billed across two models could not be held to the run's budget."""
 
     def __init__(
@@ -63,6 +73,8 @@ class AnthropicModel:
             # and a second one would spend outside what the budget reserved.
             response = self._client.with_options(max_retries=0).messages.create(
                 max_tokens=max_tokens or self._config.max_tokens,
+                thinking=THINKING,
+                extra_headers={"anthropic-beta": BINDING_BETA},
                 **self._prompt(system, tools, messages),
             )
         except anthropic.APIError as exc:
@@ -78,6 +90,9 @@ class AnthropicModel:
             ],
             text="".join(b.text for b in response.content if b.type == "text"),
             stop_reason=response.stop_reason or "",
+            dropped_thinking=len(
+                getattr(response, "input_transformations", None) or []
+            ),
             usage=Usage(
                 input_tokens=usage.input_tokens,
                 output_tokens=usage.output_tokens,

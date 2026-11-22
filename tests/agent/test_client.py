@@ -76,7 +76,8 @@ def test_request_shape_and_reply_mapping():
     ]
     assert request["cache_control"] == {"type": "ephemeral"}
     assert request["tools"] is tools and request["messages"] is messages
-    assert not {"thinking", "temperature", "tool_choice", "fallbacks"} & request.keys()
+    # `thinking` is set since 2026-11-23: see client.THINKING for why.
+    assert not {"temperature", "tool_choice", "fallbacks"} & request.keys()
     assert reply.stop_reason == "tool_use"
     assert reply.text == "Opening the bag."
     (call,) = reply.tool_calls
@@ -117,7 +118,15 @@ def test_count_tokens_counts_the_prompt_that_send_sends():
     model.send("SYSTEM", tools, messages)
     (counted,), (sent,) = api.messages.counts, api.messages.requests
     assert "max_tokens" not in counted
-    assert counted == {k: v for k, v in sent.items() if k != "max_tokens"}
+    only_sent = ("max_tokens", "thinking", "extra_headers")
+    assert counted == {k: v for k, v in sent.items() if k not in only_sent}
+    assert sent["thinking"] == {
+        "type": "adaptive",
+        "block_binding": {"prefix_mismatch_behavior": "drop_block"},
+    }
+    assert sent["extra_headers"] == {
+        "anthropic-beta": "thinking-binding-controls-2026-08-01"
+    }
 
 
 def test_count_error_becomes_a_model_error():
