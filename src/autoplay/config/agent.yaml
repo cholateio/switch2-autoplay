@@ -1,7 +1,9 @@
 # The model loop's settings. Prices per model live in core/agent/budget.py.
 model: claude-opus-5-5
 effort: medium
-max_tokens: 8000
+# One reply. The budget reserves a full-length reply before every call, so a
+# large value ends runs early; the longest reply measured in M3 was under 300 tokens.
+max_tokens: 3000
 max_usd_per_run: 2.0
 max_model_calls: 150
 screenshot_width: 1280

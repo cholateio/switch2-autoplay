@@ -29,3 +29,6 @@ lease_ms: 2000
 # after settle_timeout_ms.
 settle_stable_ms: 200
 settle_timeout_ms: 2000
+# A held button can open a screen by itself. Before a second input is added to
+# it, the picture is read again this long after the button went down.
+hold_settle_ms: 500

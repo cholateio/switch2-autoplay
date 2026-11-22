@@ -69,7 +69,7 @@ def test_request_shape_and_reply_mapping():
     (request,) = api.messages.requests
     assert api.options == [{"max_retries": 0}]
     assert request["model"] == "claude-opus-5-5"
-    assert request["max_tokens"] == 8000
+    assert request["max_tokens"] == 3000
     assert request["output_config"] == {"effort": "medium"}
     assert request["system"] == [
         {"type": "text", "text": "SYSTEM", "cache_control": {"type": "ephemeral"}}

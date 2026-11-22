@@ -6,7 +6,7 @@
 
 ## 按鍵名稱
 
-工具用的名稱：`A` `B` `X` `Y` `L` `R` `ZL` `ZR` `PLUS`（＋）`MINUS`（－）`DPAD_UP` `DPAD_DOWN` `DPAD_LEFT` `DPAD_RIGHT` `LS`（壓下左搖桿）`RS`（壓下右搖桿）。左搖桿移動、右搖桿轉鏡頭，用 `hold_stick`。
+工具用的名稱：`A` `B` `X` `Y` `L` `R` `ZL` `ZR` `PLUS`（＋）`MINUS`（－）`DPAD_UP` `DPAD_DOWN` `DPAD_LEFT` `DPAD_RIGHT` `LS`（壓下左搖桿）`RS`（壓下右搖桿）。左搖桿移動、右搖桿轉鏡頭，用 `hold_stick`。按住一顆鍵同時再按鍵或推搖桿，用 `combo`。
 
 ## 情境與回到探索的方法
 

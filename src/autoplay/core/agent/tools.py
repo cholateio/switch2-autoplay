@@ -196,6 +196,33 @@ class _Toolbox:
         sent_in = self.s.guard.hold_stick(which, x, y, ms)
         return self._after_input(before, sent_in, stick=which, x=x, y=y, ms=ms)
 
+    def combo(self, args: dict) -> ToolOutput:
+        held = _arg(args, "hold", str)
+        ms = _arg(args, "ms", int, low=16, high=MAX_PRESS_MS)
+        button, stick = args.get("button"), args.get("stick")
+        if (button is None) == (stick is None):
+            raise BadInput("give exactly one of `button` and `stick`")
+        move = None
+        if stick is not None:
+            if not isinstance(stick, dict):
+                raise BadInput("`stick` must be an object with which, x and y")
+            which = _arg(stick, "which", str)
+            if which not in ("L", "R"):
+                raise BadInput(f"`which` must be L or R, got {which!r}")
+            move = (
+                which,
+                _arg(stick, "x", float, low=-1.0, high=1.0),
+                _arg(stick, "y", float, low=-1.0, high=1.0),
+            )
+        elif not isinstance(button, str):
+            raise BadInput("`button` must be a button name")
+        before = self.s.source.latest()
+        try:
+            sent_in = self.s.guard.combo(held, ms, button=button, stick=move)
+        except ValueError as exc:
+            raise BadInput(str(exc)) from exc
+        return self._after_input(before, sent_in, held=held, then=button or move)
+
     def wait(self, args: dict) -> ToolOutput:
         ms = _arg(args, "ms", int, low=1, high=MAX_WAIT_MS)
         deadline = clock.now() + ms / 1000
@@ -332,6 +359,32 @@ def build_tools(session: Session) -> list[Tool]:
                 }
             ),
             box.hold_stick,
+        ),
+        (
+            "combo",
+            (
+                "Hold one button (`hold`), and while it is held press `button` or "
+                "deflect `stick` ({which, x, y}) for `ms` milliseconds "
+                f"(at most {MAX_PRESS_MS}); then release it. Give exactly one "
+                f"of `button` and `stick`. {after} A button the context forbids is "
+                "refused; the context is read again once `hold` is down."
+            ),
+            _schema(
+                {"hold": button, "ms": integer},
+                {
+                    "button": button,
+                    "stick": {
+                        "type": "object",
+                        "properties": {
+                            "which": {"type": "string", "enum": ["L", "R"]},
+                            "x": number,
+                            "y": number,
+                        },
+                        "required": ["which", "x", "y"],
+                    },
+                },
+            ),
+            box.combo,
         ),
         (
             "wait",

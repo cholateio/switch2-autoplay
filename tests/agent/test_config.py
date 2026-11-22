@@ -29,7 +29,7 @@ def test_packaged_defaults():
     assert config == AgentConfig(
         model="claude-opus-5-5",
         effort="medium",
-        max_tokens=8000,
+        max_tokens=3000,
         max_usd_per_run=2.0,
         max_model_calls=150,
         screenshot_width=1280,

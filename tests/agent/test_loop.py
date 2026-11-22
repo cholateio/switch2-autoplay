@@ -111,12 +111,12 @@ def test_second_action_of_one_turn_is_judged_on_the_new_picture(tmp_path):
 
 
 def test_budget_stop_releases_what_was_held(tmp_path):
-    session = make_session(tmp_path, max_usd=0.40)
+    session = make_session(tmp_path, max_usd=0.17)
     session.pad.hold("B")
     session.pad.stick("L", 1.0, 0.0)
     assert session.pad.state != PadState()
-    # 6500 output tokens cost 0.13: after two calls a full reply no longer fits.
-    model = FakeModel([[("look", {})]] * 5, usage=Usage(0, 6500, 0, 0))
+    # A full reply (3000 output tokens) costs 0.06: after two a third no longer fits.
+    model = FakeModel([[("look", {})]] * 5, usage=Usage(0, 3000, 0, 0))
     result = run_agent(session, "THE GOAL", model)
     assert (result.reason, result.model_calls) == ("budget", 2)
     assert len(model.sent) == 2
@@ -128,7 +128,7 @@ def test_budget_stop_releases_what_was_held(tmp_path):
         "THE GOAL",
         "explore",
     )
-    assert final["usd"] <= 0.40
+    assert final["usd"] <= 0.17
 
 
 def test_call_limit_stops_the_run(tmp_path):
@@ -393,3 +393,29 @@ def test_the_api_key_never_reaches_the_log(tmp_path, monkeypatch):
     )
     run_agent(session, "goal", model)
     assert "SECRET" not in (session.log.dir / "events.jsonl").read_text("utf-8")
+
+
+def test_combo_tool_sends_and_refuses_like_press(tmp_path):
+    session = make_session(tmp_path, showing=("bag",))
+    model = FakeModel(
+        [
+            [
+                ("combo", {"hold": "ZL", "button": "A", "ms": 100}),
+                ("combo", {"hold": "ZL", "button": "PLUS", "ms": 100}),
+                ("combo", {"hold": "ZL", "ms": 100}),
+                (
+                    "combo",
+                    {"hold": "L", "stick": {"which": "L", "x": 1, "y": 0}, "ms": 100},
+                ),
+            ],
+            [("finish", {"summary": "ok"})],
+        ]
+    )
+    assert run_agent(session, "goal", model).reason == "done"
+    sent, refused, malformed, stick = model.results(2)
+    assert payload(sent)["held"] == "ZL" and payload(sent)["then"] == "A"
+    assert refused["is_error"] is True and "PLUS" in refused["content"][0]["text"]
+    assert malformed["is_error"] is True
+    assert payload(stick)["then"] == ["L", 1.0, 0.0]
+    assert session.pad.pressed("A") and not session.pad.pressed("PLUS")
+    assert session.pad.state.buttons == 0

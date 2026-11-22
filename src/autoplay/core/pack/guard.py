@@ -1,3 +1,4 @@
+import contextlib
 from typing import Literal
 
 from autoplay.core.capture.base import CaptureError, FrameSource
@@ -63,6 +64,16 @@ class InputGuard:
             seen.append(names[0] if len(names) == 1 else None)
         return (seen[0] if seen[0] == seen[1] else None), seq
 
+    def _observe_after(self, ms: int) -> str | None:
+        # Measured on frame times, which is also what a recorded source has.
+        latest = self._source.latest()
+        while True:
+            context, _ = self._observe()
+            now = self._source.latest()
+            if latest is None or now is None or (now.ts - latest.ts) * 1000 >= ms:
+                return context
+            self._pad.heartbeat()
+
     def context(self) -> str | None:
         """Return the context on screen now, or None when it is not recognised.
         Raises CaptureError when the source delivers no new frame."""
@@ -106,6 +117,80 @@ class InputGuard:
         }
         self._send(lambda: self._pad.stick(which, x, y, ms), fields)
         return context
+
+    def combo(
+        self,
+        held: str,
+        ms: int,
+        button: str | None = None,
+        stick: tuple[Literal["L", "R"], float, float] | None = None,
+    ) -> str | None:
+        """Hold the button `held`, then press `button` or deflect `stick`
+        (which, x, y) for `ms`, then release; return the context it started
+        in. Exactly one of `button` and `stick` is given. Both buttons are
+        checked twice: before anything is sent, and again once `held` is down,
+        against the picture it produced. Forbidden before: nothing is sent.
+        Forbidden after: `held` is released and the second input is not sent.
+        Whenever it does not finish, everything on the gamepad is released.
+        Raises as `press` does, and ValueError for a malformed request."""
+        names = [held, *([button] if button is not None else [])]
+        if (button is None) == (stick is None):
+            raise ValueError("a combo adds exactly one action to the held button")
+        if button == held:
+            raise ValueError(f"{held} cannot be both held and pressed")
+        for name in names:
+            if name not in BUTTON_NAMES:
+                raise UnknownButton(
+                    f"unknown button {name!r}; expected one of {', '.join(BUTTON_NAMES)}"
+                )
+        context, seq = self._observe()
+        fields = {
+            "button": button if button is not None else f"{stick[0]}_STICK",
+            "held": held,
+            "context": context,
+            "seq": seq,
+            "ms": ms,
+        }
+        blocked = self._first_forbidden(names, context)
+        if blocked is not None:
+            self._event(REFUSED, reached=[], **fields)
+            raise ForbiddenInput(blocked, context)
+
+        # The buttons that went down or may have, for the audit: a combo is
+        # several gamepad calls and can stop between them.
+        reached: list[str] = []
+        try:
+            reached.append(held)
+            self._pad.hold(held)
+            # The held button can change the screen by itself. The second
+            # input is judged on the picture it will land in, as a separate
+            # press would be.
+            during = self._observe_after(self._pad.timing.hold_settle_ms)
+            blocked = self._first_forbidden(names, during)
+            if blocked is None:
+                if button is not None:
+                    reached.append(button)
+                    self._pad.press(button, ms)
+                else:
+                    self._pad.stick(stick[0], stick[1], stick[2], ms)
+            self._pad.release(held)
+        except BaseException as exc:
+            # Nothing may stay down, and neither the cleanup nor the log may
+            # replace the failure being reported.
+            with contextlib.suppress(BaseException):
+                self._pad.release_all()
+            with contextlib.suppress(BaseException):
+                self._event(FAILED, error=type(exc).__name__, reached=reached, **fields)
+            raise
+        if blocked is not None:
+            self._event(REFUSED, reached=reached, context_held=during, **fields)
+            raise ForbiddenInput(blocked, during)
+        self._event(SENT, reached=reached, context_held=during, **fields)
+        return context
+
+    def _first_forbidden(self, names: list[str], context: str | None) -> str | None:
+        forbidden = self._pack.forbidden_in(context)
+        return next((name for name in names if name in forbidden), None)
 
     def _send(self, action, fields: dict) -> None:
         try:

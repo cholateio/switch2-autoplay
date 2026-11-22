@@ -24,6 +24,7 @@ class Timing:
     lease_ms: int
     settle_stable_ms: int
     settle_timeout_ms: int
+    hold_settle_ms: int
 
 
 def load_timing(path: Path | None = None) -> Timing:

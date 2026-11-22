@@ -151,14 +151,16 @@ A game pack is a directory (`game_packs/<name>/`) with everything the core knows
 
 **Forbidden buttons.** Every input goes through `InputGuard`: it reads the context from two fresh frames, refuses a button the pack forbids there, and sends the rest. A picture that matches no single context refuses every button forbidden anywhere. What it cannot cover: the few tens of milliseconds between the second frame and the gamepad acting. The loop is one thread and waits for the picture to settle after each input, so the context changes only through its own inputs; a menu the game opens by itself inside that window is not seen.
 
-**Auditing a run.** Every attempt is an `input` event in `runs/<stamp>-play/events.jsonl` with `button`, `context`, `seq` and `outcome` (`sent`, `refused` or `failed`). To count the presses of a button that were sent, over all play runs:
+**Auditing a run.** Every attempt is an `input` event in `runs/<stamp>-play/events.jsonl` with `button`, `context`, `seq` and `outcome` (`sent`, `refused` or `failed`); a `combo` also names the button it held in `held`, the buttons that went down or may have in `reached` (whatever the outcome), and the context read while they were held in `context_held`. To count the presses of a button that were sent, over all play runs:
 
 ```bash
 cat runs/*-play/events.jsonl | python3 -c "
 import json, sys
 events = [json.loads(line) for line in sys.stdin]
 for button in ('PLUS', 'MINUS', 'HOME', 'CAPTURE'):
-    sent = [e for e in events if e['kind'] == 'input' and e['button'] == button and e['outcome'] == 'sent']
+    sent = [e for e in events if e['kind'] == 'input'
+            and (e['outcome'] == 'sent' or button in e.get('reached', []))
+            and (e['button'] == button or button in e.get('reached', []))]
     print(button, len(sent), sorted({str(e['context']) for e in sent}))
 "
 ```
@@ -220,7 +222,7 @@ The 25 runs made 127 model calls and cost US$1.79.
 - **`dialog_choice` is not a context.** The choice box moves with the number of choices, so a dialogue with choices reports `dialog` and the model reads the choices from the picture.
 - **`placing` means "transformed for Magnet Rise"**: the move label without the two arrows beside it. The same label with arrows is `explore` with that move selected, and scores 0.94 against the template; hence the 0.97 threshold.
 - **The first run's presses never reached the console.** The pad had just been plugged back into the dock; one press by hand fixed it (see "Easy to forget"). The model noticed, stopped and said so.
-- **The budget stops early.** Each call reserves a full-length reply (`max_tokens` 8000, about US$0.18), so a run ends when the money left falls below that: with `--max-usd 0.5` after about US$0.3. `--max-usd 0.05` stops before the first call.
+- **The budget stopped early.** `max_tokens` has since been lowered to 3000 (a reserve of about US$0.06 per call). During the acceptance each call reserved a full-length reply (`max_tokens` 8000, about US$0.18), so a run ends when the money left falls below that: with `--max-usd 0.5` after about US$0.3. `--max-usd 0.05` stops before the first call.
 - **`ap capture` did not react to its keys** on the owner's machine (digits, `s`); the cause is not known. The screenshots were taken by a timer script instead.
 
 ## Easy to forget

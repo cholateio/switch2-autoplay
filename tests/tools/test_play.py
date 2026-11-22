@@ -203,7 +203,7 @@ def test_the_capture_is_closed_when_the_port_cannot_be_opened(
 @pytest.mark.parametrize(
     "script, max_usd, code",
     [
-        ([[("look", {})]] * 3, "0.17", 4),
+        ([[("look", {})]] * 3, "0.065", 4),
         (["sorry"], "2", 0),
     ],
 )
