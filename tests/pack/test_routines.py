@@ -466,3 +466,26 @@ def test_a_checked_button_goes_out_only_with_a_picture_requirement(tmp_path):
     assert guard.press("Y") == "bag"
     with pytest.raises(PackError, match="not a state"):
         load_pack(write_pack(tmp_path / "b", checked={"nowhere": ["Y"]}))
+
+
+def test_a_checked_button_is_refused_when_the_picture_is_not_recognised(tmp_path):
+    from autoplay.core.pack.guard import NeedsCheck
+
+    pack = load_pack(pack_with(tmp_path, checked={"explore": ["Y"]}))
+    pad = DummyController()
+    # No context at all.
+    guard = InputGuard(pack, FakeScreen(), pad)
+    with pytest.raises(NeedsCheck):
+        guard.press("Y")
+    with pytest.raises(ForbiddenInput):
+        guard.combo("ZL", 100, button="Y")
+    # Two frames that disagree: a transition.
+    source = FakeScreen("explore")
+    guard = InputGuard(pack, source, pad)
+    source.queued = [screen("explore"), screen("bag")]
+    with pytest.raises(NeedsCheck):
+        guard.press("Y")
+    source.queued = [screen("bag"), screen("explore")]
+    with pytest.raises(ForbiddenInput):
+        guard.combo("ZL", 100, button="Y")
+    assert pad.log == []

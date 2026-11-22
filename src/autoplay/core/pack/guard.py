@@ -170,7 +170,7 @@ class InputGuard:
         if button in self._pack.forbidden_in(context):
             self._event(REFUSED, **fields)
             raise ForbiddenInput(button, context)
-        if require is None and button in self._pack.checked.get(context or "", ()):
+        if require is None and button in self._checked_in(context):
             self._event(REFUSED, needs_check=True, **fields)
             raise NeedsCheck(button, context)
         where = self._confirm_where(button, context)
@@ -286,6 +286,15 @@ class InputGuard:
         self._event(SENT, reached=reached, context_held=during, **fields)
         return context
 
+    def _checked_in(self, context: str | None) -> frozenset[str]:
+        """The buttons that need a picture requirement in `context`. In a
+        picture no context was recognised in, every button checked anywhere
+        does, as with the forbidden ones."""
+        checked = self._pack.checked
+        if context is None:
+            return frozenset().union(*checked.values())
+        return checked.get(context, frozenset())
+
     def _never_held(self) -> frozenset[str]:
         """The buttons some context forbids or wants confirmed."""
         pack = self._pack
@@ -303,7 +312,7 @@ class InputGuard:
                 for name in names
                 if name in forbidden
                 or self._confirm_where(name, context)
-                or name in self._pack.checked.get(context or "", ())
+                or name in self._checked_in(context)
             ),
             None,
         )
