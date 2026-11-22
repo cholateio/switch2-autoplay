@@ -49,6 +49,10 @@ class AnthropicModel:
             "tools": tools,
             "messages": messages,
             "output_config": {"effort": self._config.effort},
+            # Counting checks the thinking blocks as sending does (probed
+            # 2026-11-23), so both calls carry the setting and the header.
+            "thinking": THINKING,
+            "extra_headers": {"anthropic-beta": BINDING_BETA},
             "cache_control": {"type": "ephemeral"},
         }
 
@@ -73,8 +77,6 @@ class AnthropicModel:
             # and a second one would spend outside what the budget reserved.
             response = self._client.with_options(max_retries=0).messages.create(
                 max_tokens=max_tokens or self._config.max_tokens,
-                thinking=THINKING,
-                extra_headers={"anthropic-beta": BINDING_BETA},
                 **self._prompt(system, tools, messages),
             )
         except anthropic.APIError as exc:

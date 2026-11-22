@@ -118,8 +118,7 @@ def test_count_tokens_counts_the_prompt_that_send_sends():
     model.send("SYSTEM", tools, messages)
     (counted,), (sent,) = api.messages.counts, api.messages.requests
     assert "max_tokens" not in counted
-    only_sent = ("max_tokens", "thinking", "extra_headers")
-    assert counted == {k: v for k, v in sent.items() if k not in only_sent}
+    assert counted == {k: v for k, v in sent.items() if k != "max_tokens"}
     assert sent["thinking"] == {
         "type": "adaptive",
         "block_binding": {"prefix_mismatch_behavior": "drop_block"},
