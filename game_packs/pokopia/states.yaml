@@ -34,3 +34,10 @@ states:
   template: templates/dialog.png
   roi: [336, 944, 92, 136]
   threshold: 0.8
+# Not a context: the cursor beside the highlighted option of a choice list,
+# wherever on screen the list is. The manifest asks for a confirmation there.
+- name: choice
+  kind: template
+  template: templates/choice.png
+  threshold: 0.8
+  overlay: true

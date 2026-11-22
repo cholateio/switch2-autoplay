@@ -239,16 +239,19 @@ def test_an_overlay_does_not_change_the_context_but_wants_a_confirmation(tmp_pat
     assert guard.press("A") == "explore"
 
 
-def test_a_combo_and_a_routine_cannot_confirm(tmp_path):
+def test_a_combo_cannot_confirm_and_a_routine_must_say_what_it_read(tmp_path):
     pack = load_pack(choice_pack(tmp_path, {"choice": ["A"]}))
     source, pad = FakeScreen("explore"), DummyController()
     source.picture = with_choice("explore")
     guard = InputGuard(pack, source, pad)
     with pytest.raises(ForbiddenInput):
         guard.combo("ZL", 100, button="A")
+    hands = Hands(pack, guard, pad, source)
     with pytest.raises(NeedsConfirmation):
-        Hands(pack, guard, pad, source).press("A")
+        hands.press("A")
     assert pad.log == []
+    assert hands.press("A", confirm="yes (end it?)") == "explore"
+    assert pad.log != []
 
 
 def test_confirm_may_name_a_context_and_must_name_something_known(tmp_path):

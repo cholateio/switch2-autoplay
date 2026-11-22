@@ -18,8 +18,9 @@ _HEARTBEAT_S = 0.05
 
 class Hands:
     """What a pack routine works with. Every input goes through the guard, so
-    the buttons the pack forbids stay forbidden inside a routine; a routine
-    cannot answer a prompt that needs confirmation. Pictures are returned at
+    the buttons the pack forbids stay forbidden inside a routine. Where the
+    pack wants a button confirmed, a routine must pass `confirm`, saying what
+    it read on screen; it is logged like the model's. Pictures are returned at
     the reference resolution whatever the capture delivers."""
 
     def __init__(
@@ -37,8 +38,10 @@ class Hands:
         self._log = log
         self._templates: dict[str, np.ndarray] = {}
 
-    def press(self, button: str, ms: int | None = None) -> str | None:
-        return self._guard.press(button, ms)
+    def press(
+        self, button: str, ms: int | None = None, confirm: str | None = None
+    ) -> str | None:
+        return self._guard.press(button, ms, confirm)
 
     def stick(
         self, which: Literal["L", "R"], x: float, y: float, ms: int

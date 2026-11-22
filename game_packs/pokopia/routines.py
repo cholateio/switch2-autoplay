@@ -249,6 +249,8 @@ def magnet_on(hands):
         for _ in range(8):
             hands.wait(500)
             if hands.context() == "placing":
+                # The picture changes before the game takes inputs again.
+                hands.wait(1500)
                 return "transformed; nothing in hand"
     raise RoutineStopped(
         "the transformation did not start (PP may be empty)", step="ZR"
@@ -274,12 +276,16 @@ def _untransform(hands) -> str:
                 "character may overlap a block: step back one cell",
                 step="R",
             )
-    hands.press("R")
-    hands.wait(900)
     confirm = hands.template("confirm_untransform.png")
-    if checks.label_score(hands.frame(), confirm, CONFIRM_ROI) < SEEN:
+    for _ in range(2):
+        hands.press("R")
+        hands.wait(900)
+        if checks.label_score(hands.frame(), confirm, CONFIRM_ROI) >= SEEN:
+            break
+    else:
         raise RoutineStopped("the confirmation box did not appear", step="R")
-    hands.press("A")
+    # The question was matched above and the cursor starts on the first option.
+    hands.press("A", confirm="是 (要結束變身，恢復原來的樣子嗎？)")
     # The change back takes between 1.5 and 3 s.
     for _ in range(10):
         hands.wait(500)
