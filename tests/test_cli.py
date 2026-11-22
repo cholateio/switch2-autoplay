@@ -33,3 +33,15 @@ def test_text_the_console_cannot_encode_does_not_crash(monkeypatch):
     print("caf\u00e9")
     sys.stdout.flush()
     assert b"caf\\xe9" in raw.getvalue()
+
+
+def test_a_closed_or_plain_stream_does_not_stop_a_command(monkeypatch, capsys):
+    import io
+
+    closed = io.TextIOWrapper(io.BytesIO(), encoding="utf-8")
+    closed.close()
+    monkeypatch.setattr(sys, "stderr", closed)
+    assert main(["--version"]) == 0
+    monkeypatch.setattr(sys, "stderr", io.StringIO())
+    monkeypatch.setattr(sys, "stdout", io.StringIO())
+    assert main(["--version"]) == 0

@@ -205,7 +205,7 @@ Run on the owner's Switch 2 with the owner present; pad in the dock, capture car
 | Check | Result |
 |---|---|
 | `ap classify` on the Pokopia screenshots the templates were placed with (`fixtures/pokopia/screens/`) | 101/101 |
-| `ap classify` on every third screenshot, set aside before the templates were cut (`fixtures/pokopia/heldout/`) | 46/46 after one fix: the `placing` template was recut and its threshold raised to 0.97 because of one held-out picture |
+| `ap classify` on every third screenshot (`fixtures/pokopia/heldout/`) | 45/46 at first; 46/46 after the `placing` template was recut and its threshold raised to 0.97 because of the one miss. The set was therefore tuned against and is no longer independent evidence |
 | All 373 captured frames through `StateRegistry.matches` | none matched more than one context |
 | `ap play`, goal "open the bag, then close it", 10 runs | 10/10 `reason=done`; each log shows a press in `bag` and ends in `explore`; 5 model calls, about US$0.06 and 16 s per run |
 | `ap play`, goal "open the main menu, then close it", 10 runs | 10/10, same checks; about US$0.07 per run |
@@ -216,6 +216,7 @@ Run on the owner's Switch 2 with the owner present; pad in the dock, capture car
 
 The 25 runs made 127 model calls and cost US$1.79.
 
+- **A in a dialogue is not guarded.** The guard refuses buttons per context and cannot read what a choice says; a choice that gives an item away or sends a Pokémon off is held back only by the guide and the goal. A confirmation rule for choices is still to be designed.
 - **`dialog_choice` is not a context.** The choice box moves with the number of choices, so a dialogue with choices reports `dialog` and the model reads the choices from the picture.
 - **`placing` means "transformed for Magnet Rise"**: the move label without the two arrows beside it. The same label with arrows is `explore` with that move selected, and scores 0.94 against the template; hence the 0.97 threshold.
 - **The first run's presses never reached the console.** The pad had just been plugged back into the dock; one press by hand fixed it (see "Easy to forget"). The model noticed, stopped and said so.

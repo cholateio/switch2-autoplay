@@ -1,4 +1,5 @@
 import argparse
+import contextlib
 import sys
 from importlib.metadata import version
 
@@ -43,8 +44,9 @@ def _build_parser() -> argparse.ArgumentParser:
 def _tolerant_output() -> None:
     # A Windows console uses a legacy code page (cp950 here); text it cannot
     # encode, such as a model's summary, must not crash the command.
+    # A closed or replaced stream may refuse; the command must still run.
     for stream in (sys.stdout, sys.stderr):
-        if hasattr(stream, "reconfigure"):
+        with contextlib.suppress(AttributeError, TypeError, ValueError, OSError):
             stream.reconfigure(errors="backslashreplace")
 
 

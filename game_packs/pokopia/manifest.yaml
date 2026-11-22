@@ -13,5 +13,5 @@ states_file: states.yaml
 forbidden:
   "*": [HOME, CAPTURE]
   bag: [PLUS]
-  storage: [PLUS]
+  storage: [PLUS, Y]
   main_menu: [MINUS]
