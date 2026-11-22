@@ -38,11 +38,13 @@ def _pitch(hands, value: int) -> None:
     hands.wait(400)
 
 
-def _press_if(hands, button: str, require, step: str, why: str) -> None:
+def _press_if(
+    hands, button: str, require, step: str, why: str, confirm: str | None = None
+) -> None:
     """Press only if `require` holds on the pictures the guard reads right
     before sending; a check made a moment earlier can already be stale."""
     try:
-        hands.press(button, require=require)
+        hands.press(button, confirm=confirm, require=require)
     except UnexpectedPicture:
         raise RoutineStopped(f"{button} not pressed: {why}", step=step) from None
 
@@ -362,7 +364,38 @@ def magnet_on(hands):
     )
 
 
+def _confirm_open(hands) -> bool:
+    confirm = hands.template("confirm_untransform.png")
+    return checks.label_score(hands.frame(), confirm, CONFIRM_ROI) >= SEEN
+
+
+def _answer_confirm(hands) -> str:
+    # The question was matched and the cursor starts on the first option.
+    _press_if(
+        hands,
+        "A",
+        lambda frame: (
+            checks.label_score(
+                frame, hands.template("confirm_untransform.png"), CONFIRM_ROI
+            )
+            >= SEEN
+        ),
+        "confirm",
+        "the question about ending the transformation was no longer on screen",
+        confirm="是 (要結束變身，恢復原來的樣子嗎？)",
+    )
+    # The change back takes between 1.5 and 3 s.
+    for _ in range(10):
+        hands.wait(500)
+        if hands.context() == "explore":
+            return "human form again"
+    raise RoutineStopped("did not return to explore", step="confirm")
+
+
 def _untransform(hands) -> str:
+    if _confirm_open(hands):
+        # Left open by an R that was not followed up, as when a run is stopped.
+        return _answer_confirm(hands)
     context = hands.context()
     if context == "bag":
         hands.press("B")
@@ -381,22 +414,12 @@ def _untransform(hands) -> str:
                 "character may overlap a block: step back one cell",
                 step="R",
             )
-    confirm = hands.template("confirm_untransform.png")
     for _ in range(2):
         hands.press("R")
         hands.wait(900)
-        if checks.label_score(hands.frame(), confirm, CONFIRM_ROI) >= SEEN:
-            break
-    else:
-        raise RoutineStopped("the confirmation box did not appear", step="R")
-    # The question was matched above and the cursor starts on the first option.
-    hands.press("A", confirm="是 (要結束變身，恢復原來的樣子嗎？)")
-    # The change back takes between 1.5 and 3 s.
-    for _ in range(10):
-        hands.wait(500)
-        if hands.context() == "explore":
-            return "human form again"
-    raise RoutineStopped("did not return to explore", step="confirm")
+        if _confirm_open(hands):
+            return _answer_confirm(hands)
+    raise RoutineStopped("the confirmation box did not appear", step="R")
 
 
 @routine(
@@ -552,6 +575,7 @@ def break_front(hands):
     count=Param(int, 1, 8),
 )
 def break_column(hands, count):
+    _in_placing(hands, "start")
     # From behind, the character hides the lower half of the outline.
     hands.stick("R", 1.0, 0.0, YAW_MS)
     hands.wait(300)
@@ -560,6 +584,7 @@ def break_column(hands, count):
             for _ in range(7):
                 if _gate(hands)[0]:
                     break
+                _in_placing(hands, f"block {block}")
                 hands.press("L", 150)
                 hands.wait(500)
             try:
@@ -568,6 +593,7 @@ def break_column(hands, count):
                 raise RoutineStopped(
                     f"{stop}; {block - 1} broken", step=stop.step
                 ) from None
+            _in_placing(hands, f"block {block}")
             hands.press("L", RISE_MS)
             hands.wait(500)
     finally:
@@ -661,7 +687,7 @@ def leave(hands):
         hands.press("B")
         hands.wait(900)
         done.append("closed the bag")
-    if hands.context() == "placing":
+    if hands.context() == "placing" or _confirm_open(hands):
         done.append(_untransform(hands))
     if hands.context() == "explore" and _prompt(hands, hands.frame(), "spit"):
         hands.press("R")

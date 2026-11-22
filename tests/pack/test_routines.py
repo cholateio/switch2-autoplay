@@ -399,3 +399,44 @@ def test_declared_arguments_must_be_the_functions_arguments(tmp_path):
     )
     with pytest.raises(PackError, match="tap\\(hands, times\\)"):
         load_pack(pack_with(tmp_path, code))
+
+
+@pytest.mark.parametrize(
+    "definition",
+    [
+        "def leave(*, hands):\n    return ''",
+        "def leave(hands=None):\n    return ''",
+        "def leave(hands, **more):\n    return ''",
+    ],
+)
+def test_hands_must_be_a_plain_positional_parameter(tmp_path, definition):
+    code = f"from autoplay.core.pack.routines import routine\n@routine('go home')\n{definition}\n"
+    with pytest.raises(PackError, match="must be defined as leave"):
+        load_pack(pack_with(tmp_path, code, on_stop="leave"))
+
+
+@pytest.mark.parametrize(
+    "definition",
+    [
+        "def tap(hands, times, /):\n    return ''",
+        "def tap(hands, times=2):\n    return ''",
+    ],
+)
+def test_declared_arguments_must_take_a_keyword_and_have_no_default(
+    tmp_path, definition
+):
+    code = (
+        "from autoplay.core.pack.routines import Param, routine\n"
+        f"@routine('x', times=Param(int, 1, 3))\n{definition}\n"
+    )
+    with pytest.raises(PackError, match="must be defined as tap"):
+        load_pack(pack_with(tmp_path, code))
+
+
+def test_a_keyword_only_declared_argument_is_fine(tmp_path):
+    code = (
+        "from autoplay.core.pack.routines import Param, routine\n"
+        "@routine('x', times=Param(int, 1, 3))\ndef tap(hands, *, times):\n    return str(times)\n"
+    )
+    pack = load_pack(pack_with(tmp_path, code))
+    assert pack.routines["tap"].run(None, times=2) == "2"

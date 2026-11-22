@@ -206,3 +206,50 @@ def test_a_cell_picture_tells_the_same_item_from_another_and_from_an_empty_cell(
     assert not checks.same_icon(icon, checks.cell_icon(other, (1, 4)))
     empty = np.full((1080, 1920, 3), 235, np.uint8)
     assert not checks.same_icon(icon, checks.cell_icon(empty, (1, 4)))
+
+
+class WrongPlace:
+    """Hands in a context where a height or break routine has no business."""
+
+    def __init__(self, context):
+        self._context, self.sent = context, []
+
+    def context(self):
+        return self._context
+
+    def press(self, *args, **kwargs):
+        self.sent.append(("press", args))
+
+    def stick(self, *args, **kwargs):
+        self.sent.append(("stick", args))
+
+    def combo(self, *args, **kwargs):
+        self.sent.append(("combo", args))
+
+    def wait(self, ms):
+        pass
+
+    def log(self, **fields):
+        pass
+
+
+@pytest.mark.parametrize("context", ["explore", "bag", None])
+@pytest.mark.parametrize(
+    ("name", "args"),
+    [
+        ("ground", {}),
+        ("rise", {"steps": 2}),
+        ("break_column", {"count": 2}),
+        ("break_wall", {"width": 2, "layers": 1}),
+    ],
+)
+def test_height_and_break_routines_send_nothing_outside_magnet_rise(
+    context, name, args
+):
+    from autoplay.core.pack.routines import RoutineStopped
+
+    routines = load_routines(PACK / "routines.py")
+    hands = WrongPlace(context)
+    with pytest.raises(RoutineStopped, match="needs Magnet Rise"):
+        routines[name].run(hands, **args)
+    assert hands.sent == []

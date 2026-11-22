@@ -132,22 +132,27 @@ def load_routines(path: Path) -> dict[str, Routine]:
                 )
         expected = ["hands", *params]
         try:
-            takes = [
-                p.name
-                for p in inspect.signature(value).parameters.values()
-                if p.kind
-                in (p.POSITIONAL_ONLY, p.POSITIONAL_OR_KEYWORD, p.KEYWORD_ONLY)
-                and p.default is p.empty
-            ]
-            accepts = list(inspect.signature(value).parameters)
+            given = list(inspect.signature(value).parameters.values())
         except (TypeError, ValueError) as exc:
             raise RoutineError(f"{path}: routine {name!r}: {exc}") from exc
-        if takes != expected or accepts != expected:
+        # It is called as fn(hands, **arguments): `hands` must take a
+        # positional argument and every declared one a keyword, none optional.
+        fits = (
+            [p.name for p in given] == expected
+            and all(p.default is p.empty for p in given)
+            and given[0].kind
+            in (given[0].POSITIONAL_ONLY, given[0].POSITIONAL_OR_KEYWORD)
+            and all(
+                p.kind in (p.POSITIONAL_OR_KEYWORD, p.KEYWORD_ONLY) for p in given[1:]
+            )
+        )
+        if not fits:
             # Found now and not when the routine is first called, which for
             # an on_stop routine is when a run is already ending.
             raise RoutineError(
                 f"{path}: routine {name!r} must be defined as "
-                f"{name}({', '.join(expected)}), got ({', '.join(accepts)})"
+                f"{name}({', '.join(expected)}), each a plain required parameter; "
+                f"got {inspect.signature(value)}"
             )
         found[name] = Routine(name, description, value, dict(params))
     return found
