@@ -6,6 +6,7 @@ confirm a step stops and says where."""
 import importlib.util
 from pathlib import Path
 
+from autoplay.core.pack.guard import UnexpectedPicture
 from autoplay.core.pack.routines import Param, RoutineStopped, routine
 
 _spec = importlib.util.spec_from_file_location(
@@ -21,7 +22,8 @@ TURN_MS = 60
 RISE_MS = 300
 # Scores of the white lettering: the same prompt 0.99 to 1.0, another one at most 0.67.
 SEEN = 0.85
-# Share of changed pixels in front of the character: placed 0.09 to 0.15, not placed at most 0.03.
+# Share of changed pixels in front of the character: placed 0.047 to 0.36,
+# a press that placed nothing or just waiting at most 0.028.
 PLACED = 0.04
 STANDING = 130
 CONFIRM_ROI = (380, 880, 760, 120)
@@ -33,6 +35,15 @@ def _pitch(hands, value: int) -> None:
     hands.stick("R", 0.0, -1.0, 1500)
     hands.stick("R", 0.0, 1.0, value)
     hands.wait(400)
+
+
+def _press_if(hands, button: str, require, step: str, why: str) -> None:
+    """Press only if `require` holds on the pictures the guard reads right
+    before sending; a check made a moment earlier can already be stale."""
+    try:
+        hands.press(button, require=require)
+    except UnexpectedPicture:
+        raise RoutineStopped(f"{button} not pressed: {why}", step=step) from None
 
 
 def _prompt(hands, frame, name: str) -> bool:
@@ -68,13 +79,27 @@ def face_away(hands):
 
 
 def _open_bag(hands) -> None:
-    for _ in range(2):
-        if hands.context() == "bag":
-            return
+    start = hands.context()
+    if start == "bag":
+        return
+    if start not in ("explore", "placing"):
+        raise RoutineStopped(
+            f"the bag is opened from explore or placing, not from {start}",
+            step="open the bag",
+        )
+    for attempt in range(4):
+        if attempt == 2 and start == "explore" and hands.context() == "explore":
+            # Left alone for a few minutes the human form dozes off and takes
+            # no button (seen 2026-11-23); a push of the stick wakes it.
+            hands.stick("L", 0.0, 1.0, TURN_MS)
+            hands.wait(1500)
+        if hands.context() != start:
+            break
         hands.press("X")
         hands.wait(1300)
-    if hands.context() != "bag":
-        raise RoutineStopped("the bag did not open", step="open the bag")
+        if hands.context() == "bag":
+            return
+    raise RoutineStopped("the bag did not open", step="open the bag")
 
 
 def _goto(hands, page: int, row: int, column: int) -> None:
@@ -137,7 +162,8 @@ def _in_hand(hands, frame) -> str | None:
     "the next, and so on. direction e is screen right, w screen left. Needs an "
     "item in hand, the character facing away from the camera, quantity 1, and "
     "the camera square to the grid (a row of blocks looks level on screen). Sets "
-    "the mid view. Each block is confirmed on the picture and retried once. "
+    "the mid view. Each block is confirmed on the picture; if one cannot be "
+    "confirmed the routine stops without pressing again. "
     "Called again at the end of a line, in the other direction, it puts the "
     "next layer on top (up to layer 2 from the ground; rise first for more).",
     direction=Param(str, choices=("e", "w")),
@@ -149,6 +175,20 @@ def place_line(hands, direction, count):
     return f"placed {placed} going {direction}; now in front of the last one"
 
 
+def _still(hands):
+    """A frame taken once the picture has stopped moving: after a step the
+    camera follows for a moment, and a change measured across that is not the
+    block's."""
+    last = hands.frame()
+    for _ in range(8):
+        hands.wait(250)
+        now = hands.frame()
+        if checks.changed_fraction(last, now) < 0.01:
+            return now
+        last = now
+    return last
+
+
 def _line(hands, direction: str, count: int) -> int:
     dx = 1.0 if direction == "e" else -1.0
     placed = 0
@@ -156,7 +196,7 @@ def _line(hands, direction: str, count: int) -> int:
         if block > 1:
             hands.combo("ZL", STEP_MS, stick=("L", dx, 0.0))
             hands.wait(500)
-        before = hands.frame()
+        before = _still(hands)
         hand = _in_hand(hands, before)
         if hand != "one" and hand != "human":
             why = (
@@ -165,23 +205,21 @@ def _line(hands, direction: str, count: int) -> int:
                 else "nothing is in hand"
             )
             raise RoutineStopped(f"{why}; {placed} placed", step=f"block {block}")
-        change = 0.0
-        for attempt in (1, 2):
-            hands.press("A")
-            hands.wait(1300)
+        hands.press("A")
+        hands.wait(1300)
+        change = checks.changed_fraction(before, hands.frame())
+        if change < PLACED:
+            # A block that lands late: look once more before deciding.
+            hands.wait(700)
             change = checks.changed_fraction(before, hands.frame())
-            hands.log(
-                routine="place_line",
-                block=block,
-                attempt=attempt,
-                change=round(change, 3),
-            )
-            if change >= PLACED:
-                break
-        else:
+        hands.log(routine="place_line", block=block, change=round(change, 3))
+        if change < PLACED:
+            # No second press here. On 2026-11-23 a block that was placed read
+            # 0.028, a retry put another on top of it, and the count was off.
             raise RoutineStopped(
-                f"no block appeared after two presses (picture change {change:.3f}); "
-                f"{placed} placed in this line. The cell may be out of reach at this height",
+                f"A was pressed but no block was seen to appear (picture change "
+                f"{change:.3f}); {placed} confirmed in this line. It may still have "
+                "been placed: look, and check the count in the bag, before placing more",
                 step=f"block {block}",
             )
         placed += 1
@@ -324,10 +362,10 @@ def rise(hands, steps):
     return f"rose {steps} steps"
 
 
-def _gate(hands) -> tuple[bool, str]:
+def _gate(hands, frame=None) -> tuple[bool, str]:
     """Whether Y may be pressed: the break prompt and the outline of a block
     that stands (not a flat ground cell, not half hidden) are both seen."""
-    frame = hands.frame()
+    frame = hands.frame() if frame is None else frame
     if not _prompt(hands, frame, "break"):
         return False, (
             "no 'Y 破壞' prompt: nothing is targeted. Usual causes: the character "
@@ -370,7 +408,13 @@ def _break(hands, step: str) -> None:
     hands.log(routine="break", step=step, gate=ok, why=why)
     if not ok:
         raise RoutineStopped(f"Y not pressed: {why}", step=step)
-    hands.press("Y")
+    _press_if(
+        hands,
+        "Y",
+        lambda frame: _gate(hands, frame)[0],
+        step,
+        "the outline or the prompt was gone when it was about to be sent",
+    )
     for _ in range(23):
         hands.wait(150)
         if _note(hands):
@@ -479,7 +523,21 @@ def eat_berries(hands, most):
     full = hands.template("note_pp_full.png")
     eaten, is_full = 0, False
     while eaten < most and not is_full:
-        hands.press("A")
+        # Checked before every press: with the berries gone, A would act on
+        # whatever is in front of the character.
+        if not _prompt(hands, hands.frame(), "eat"):
+            raise RoutineStopped(
+                f"the prompt no longer offers to eat; ate {eaten} times. The "
+                "berries may have run out",
+                step=f"berry {eaten + 1}",
+            )
+        _press_if(
+            hands,
+            "A",
+            lambda frame: _prompt(hands, frame, "eat"),
+            f"berry {eaten + 1}",
+            f"the eat prompt was gone when it was about to be sent; ate {eaten} times",
+        )
         eaten += 1
         for _ in range(11):
             hands.wait(150)

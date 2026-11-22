@@ -301,3 +301,11 @@ def test_calls_of_one_turn_all_run_when_none_fails(tmp_path):
     run_agent(session, "goal", model)
     assert not any(result.get("is_error") for result in model.results(2))
     assert [e["button"] for e in events(session, "input")] == ["X", "B"]
+
+
+def test_an_overrun_is_logged(tmp_path):
+    session = session_with(tmp_path, max_usd=0.20)
+    model = FakeModel([[("look", {})]] * 3, usage=Usage(60_000, 100, 0, 0))
+    assert run_agent(session, "goal", model).reason == "budget"
+    (overrun,) = events(session, "budget_overrun")
+    assert overrun["usd"] > 0

@@ -1,5 +1,8 @@
 import contextlib
+from collections.abc import Callable
 from typing import Literal
+
+import numpy as np
 
 from autoplay.core.capture.base import CaptureError, FrameSource
 from autoplay.core.controller.base import BUTTON_NAMES, Controller, UnknownButton
@@ -36,6 +39,20 @@ class NeedsConfirmation(ForbiddenInput):
         self.context = where
 
 
+class UnexpectedPicture(ForbiddenInput):
+    """A press was refused because the picture the guard read just before
+    sending did not show what the caller required."""
+
+    def __init__(self, button: str, context: str | None) -> None:
+        RuntimeError.__init__(
+            self,
+            f"button {button} was not sent: the picture no longer shows what it "
+            "was meant for",
+        )
+        self.button = button
+        self.context = context
+
+
 class InputGuard:
     """The only way a run reaches the gamepad: every input is checked against
     the buttons the pack forbids in the context on screen, and logged.
@@ -62,12 +79,14 @@ class InputGuard:
         self._pad = pad
         self._log = log
         self._overlays: frozenset[str] = frozenset()
+        self._seen: list[np.ndarray] = []
 
     def _observe(self) -> tuple[str | None, int]:
         latest = self._source.latest()
         seq = latest.seq if latest is not None else 0
         seen: list[str | None] = []
         overlays: set[str] = set()
+        self._seen = []
         for _ in range(2):
             frame = self._source.wait_next(seq, FRAME_TIMEOUT_S)
             if frame is None:
@@ -75,6 +94,7 @@ class InputGuard:
                     f"no new frame within {FRAME_TIMEOUT_S} s; the context is unknown"
                 )
             seq = frame.seq
+            self._seen.append(frame.bgr)
             names = self._pack.states.matches(frame.bgr)
             seen.append(names[0] if len(names) == 1 else None)
             # Shown in either frame counts: asking once too often is the safe side.
@@ -109,12 +129,21 @@ class InputGuard:
         return None
 
     def press(
-        self, button: str, ms: int | None = None, confirm: str | None = None
+        self,
+        button: str,
+        ms: int | None = None,
+        confirm: str | None = None,
+        require: Callable[[np.ndarray], bool] | None = None,
     ) -> str | None:
         """Press `button` unless the context forbids it, and return the context
         it was pressed in. Where the pack wants the button confirmed it is sent
         only with a non-empty `confirm`, which is logged; otherwise
-        NeedsConfirmation is raised and nothing is sent. Raises ForbiddenInput, with nothing sent to the
+        NeedsConfirmation is raised and nothing is sent. `require`, when given,
+        must hold on both frames the context was read from and on the newest
+        frame the source has when everything else has been checked; otherwise
+        UnexpectedPicture is raised and nothing is sent. What remains unseen
+        is whatever changes while the predicate runs on that last frame and
+        during the delay to the device; that cannot be closed from here. Raises ForbiddenInput, with nothing sent to the
         gamepad, for a forbidden button; UnknownButton for a name that does not
         exist; CaptureError when the context cannot be read. Whatever the
         gamepad raises propagates."""
@@ -133,6 +162,18 @@ class InputGuard:
                 self._event(REFUSED, needs_confirm=where, **fields)
                 raise NeedsConfirmation(button, where)
             fields = {**fields, "confirm": confirm, "confirm_where": where}
+        if require is not None:
+            # Last of all. The two observed frames first; then the newest
+            # frame is fetched and checked, with nothing between that check
+            # and the send: reading the context and the checks before take
+            # long enough for several frames to have arrived.
+            held = [bool(require(bgr)) for bgr in self._seen]
+            newest = self._source.latest()
+            if newest is not None:
+                fields = {**fields, "required_seq": newest.seq}
+            if not all(held) or (newest is not None and not require(newest.bgr)):
+                self._event(REFUSED, unexpected_picture=True, **fields)
+                raise UnexpectedPicture(button, context)
         self._send(lambda: self._pad.press(button, ms), fields)
         return context
 
@@ -164,7 +205,8 @@ class InputGuard:
         (which, x, y) for `ms`, then release; return the context it started
         in. Exactly one of `button` and `stick` is given. Both buttons are
         checked twice: before anything is sent, and again once `held` is down,
-        against the picture it produced. Forbidden before: nothing is sent.
+        against the picture it produced. `held` may not be a button that any
+        context forbids or wants confirmed. Forbidden before: nothing is sent.
         Forbidden after: `held` is released and the second input is not sent.
         Whenever it does not finish, everything on the gamepad is released.
         Raises as `press` does, and ValueError for a malformed request."""
@@ -187,6 +229,10 @@ class InputGuard:
             "ms": ms,
         }
         blocked = self._first_forbidden(names, context)
+        if blocked is None and held in self._never_held():
+            # A held button stays down across whatever screen it opens, so it
+            # would arrive there before that screen's rules could be applied.
+            blocked = held
         if blocked is not None:
             self._event(REFUSED, reached=[], **fields)
             raise ForbiddenInput(blocked, context)
@@ -222,6 +268,11 @@ class InputGuard:
             raise ForbiddenInput(blocked, during)
         self._event(SENT, reached=reached, context_held=during, **fields)
         return context
+
+    def _never_held(self) -> frozenset[str]:
+        """The buttons some context forbids or wants confirmed."""
+        pack = self._pack
+        return pack.forbidden_in(None).union(*pack.confirm.values())
 
     def _first_forbidden(self, names: list[str], context: str | None) -> str | None:
         # A combo carries no confirmation, so it never sends a button that needs one.

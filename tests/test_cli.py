@@ -1,3 +1,4 @@
+import io
 import subprocess
 import sys
 
@@ -45,3 +46,19 @@ def test_a_closed_or_plain_stream_does_not_stop_a_command(monkeypatch, capsys):
     monkeypatch.setattr(sys, "stderr", io.StringIO())
     monkeypatch.setattr(sys, "stdout", io.StringIO())
     assert main(["--version"]) == 0
+
+
+def test_a_closed_stream_is_replaced_so_that_writing_to_it_works(monkeypatch):
+    closed = io.TextIOWrapper(io.BytesIO(), encoding="utf-8")
+    closed.close()
+    monkeypatch.setattr(sys, "stderr", closed)
+    monkeypatch.setattr(sys, "stdout", None)
+    # No command: argparse prints its usage to stderr and exits with 2.
+    assert main([]) == 2
+    assert not sys.stderr.closed and sys.stdout is not None
+
+
+def test_a_missing_stream_is_replaced_too(monkeypatch):
+    monkeypatch.delattr(sys, "stderr")
+    assert main([]) == 2
+    assert sys.stderr is not None

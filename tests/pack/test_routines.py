@@ -7,7 +7,12 @@ import yaml
 from synth_pack import FakeScreen, _patch, screen, write_pack
 
 from autoplay.core.controller.dummy import DummyController
-from autoplay.core.pack.guard import ForbiddenInput, InputGuard, NeedsConfirmation
+from autoplay.core.pack.guard import (
+    ForbiddenInput,
+    InputGuard,
+    NeedsConfirmation,
+    UnexpectedPicture,
+)
 from autoplay.core.pack.hands import Hands
 from autoplay.core.pack.loader import PackError, load_pack
 from autoplay.core.pack.routines import Param, RoutineStopped
@@ -263,3 +268,108 @@ def test_confirm_may_name_a_context_and_must_name_something_known(tmp_path):
         load_pack(write_pack(tmp_path / "b", confirm={"nowhere": ["A"]}))
     with pytest.raises(PackError):
         load_pack(write_pack(tmp_path / "c", confirm={"bag": ["NOPE"]}))
+
+
+def test_a_button_with_a_rule_anywhere_may_not_be_the_held_one(tmp_path):
+    # Holding A in explore could open a dialogue and still be down when its
+    # choice list appears; holding PLUS could reach the bag, where it drops items.
+    pack = load_pack(choice_pack(tmp_path, {"choice": ["A"]}))
+    source, pad, log = (
+        FakeScreen("explore"),
+        DummyController(),
+        RunLog("t", tmp_path / "r"),
+    )
+    guard = InputGuard(pack, source, pad, log)
+    for held in ("A", "PLUS", "MINUS"):
+        with pytest.raises(ForbiddenInput) as info:
+            guard.combo(held, 100, stick=("L", 1.0, 0.0))
+        assert info.value.button == held
+    assert pad.log == []
+    events = [
+        json.loads(line)
+        for line in (log.dir / "events.jsonl").read_text("utf-8").splitlines()
+    ]
+    assert [e["outcome"] for e in events if e["kind"] == "input"] == ["refused"] * 3
+    assert guard.combo("ZL", 100, stick=("L", 1.0, 0.0)) == "explore"
+    assert pad.log != []
+
+
+def test_a_press_can_require_something_of_the_last_pictures_before_it(tmp_path):
+    pack = load_pack(pack_with(tmp_path))
+    source, pad, log = (
+        FakeScreen("explore"),
+        DummyController(),
+        RunLog("t", tmp_path / "r"),
+    )
+    guard = InputGuard(pack, source, pad, log)
+    seen = []
+
+    def bright(bgr):
+        seen.append(bgr.shape)
+        return bool(bgr[0, 0, 0] > 100)
+
+    with pytest.raises(UnexpectedPicture):
+        guard.press("A", require=bright)
+    assert pad.log == [] and len(seen) >= 1
+    # The picture changes between the caller's own look and the send: the
+    # second of the two frames the guard reads no longer passes.
+    source.picture = screen("explore", shade=200)
+    source.queued = [screen("explore", shade=200), screen("explore", shade=40)]
+    with pytest.raises(UnexpectedPicture):
+        guard.press("A", require=bright)
+    assert pad.log == []
+    source.picture = screen("explore", shade=200)
+    assert guard.press("A", require=bright) == "explore"
+    assert pad.log != []
+    events = [
+        json.loads(line)
+        for line in (log.dir / "events.jsonl").read_text("utf-8").splitlines()
+    ]
+    outcomes = [e["outcome"] for e in events if e["kind"] == "input"]
+    assert outcomes == ["refused", "refused", "sent"]
+
+
+def test_hands_give_the_requirement_a_picture_at_the_reference_size(tmp_path):
+    pack = load_pack(pack_with(tmp_path))
+    source = FakeScreen("explore")
+    source.picture = cv2.resize(screen("explore"), (1280, 720))
+    shapes = []
+    hands = hands_for(pack, source, DummyController())
+    hands.press("A", require=lambda bgr: shapes.append(bgr.shape) or True)
+    assert set(shapes) == {(1080, 1920, 3)}
+
+
+def test_the_requirement_is_checked_on_the_newest_frame_last(tmp_path):
+    from autoplay.core.capture.base import Frame
+
+    class Advancing(FakeScreen):
+        """The capture goes on while the guard is busy: after the first call,
+        `latest` shows a picture the two observed frames did not."""
+
+        late = None
+        calls = 0
+
+        def latest(self):
+            self.calls += 1
+            if self.late is not None and self.calls > 1:
+                return Frame(self.late, 99.0, 9999)
+            return super().latest()
+
+    pack = load_pack(pack_with(tmp_path))
+    source, pad = Advancing("explore"), DummyController()
+    source.picture = screen("explore", shade=200)
+    source.late = screen("explore", shade=40)
+    guard = InputGuard(pack, source, pad)
+    log = RunLog("t", tmp_path / "r")
+    guard = InputGuard(pack, source, pad, log)
+    with pytest.raises(UnexpectedPicture):
+        guard.press("A", require=lambda bgr: bool(bgr[0, 0, 0] > 100))
+    assert pad.log == []
+    (refused,) = [
+        json.loads(line)
+        for line in (log.dir / "events.jsonl").read_text("utf-8").splitlines()
+    ]
+    assert refused["outcome"] == "refused" and refused["required_seq"] == 9999
+    source.late = screen("explore", shade=210)
+    source.calls = 0
+    assert guard.press("A", require=lambda bgr: bool(bgr[0, 0, 0] > 100)) == "explore"

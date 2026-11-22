@@ -1,4 +1,5 @@
 import time
+from collections.abc import Callable
 from pathlib import Path
 from typing import Literal
 
@@ -39,9 +40,28 @@ class Hands:
         self._templates: dict[str, np.ndarray] = {}
 
     def press(
-        self, button: str, ms: int | None = None, confirm: str | None = None
+        self,
+        button: str,
+        ms: int | None = None,
+        confirm: str | None = None,
+        require: Callable[[np.ndarray], bool] | None = None,
     ) -> str | None:
-        return self._guard.press(button, ms, confirm)
+        """`require` is given a picture at the reference resolution and must
+        hold on the frames read right before the button is sent; see
+        InputGuard.press."""
+        check = None
+        if require is not None:
+
+            def check(bgr: np.ndarray) -> bool:
+                return bool(require(self._reference(bgr)))
+
+        return self._guard.press(button, ms, confirm, check)
+
+    @staticmethod
+    def _reference(bgr: np.ndarray) -> np.ndarray:
+        if bgr.shape[:2] != (BASE_H, BASE_W):
+            return cv2.resize(bgr, (BASE_W, BASE_H), interpolation=cv2.INTER_AREA)
+        return bgr
 
     def stick(
         self, which: Literal["L", "R"], x: float, y: float, ms: int
@@ -74,10 +94,7 @@ class Hands:
         frame = self._source.wait_next(latest.seq if latest else 0, FRAME_TIMEOUT_S)
         if frame is None:
             raise CaptureError(f"no new frame within {FRAME_TIMEOUT_S} s")
-        bgr = frame.bgr
-        if bgr.shape[:2] != (BASE_H, BASE_W):
-            bgr = cv2.resize(bgr, (BASE_W, BASE_H), interpolation=cv2.INTER_AREA)
-        return bgr
+        return self._reference(frame.bgr)
 
     def context(self) -> str | None:
         return self._guard.context()

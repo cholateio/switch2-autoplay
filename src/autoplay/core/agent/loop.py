@@ -200,6 +200,11 @@ def _converse(
             system, definitions, messages, max_tokens=session.budget.reply_limit()
         )
         usd = session.budget.add(reply.usage)
+        if session.budget.overrun_usd > 0:
+            # The reserve rests on the counted prompt size; see Budget.
+            session.log.event(
+                "budget_overrun", usd=round(session.budget.overrun_usd, 6)
+            )
         session.log.event(
             "model_call",
             input_tokens=reply.usage.input_tokens,

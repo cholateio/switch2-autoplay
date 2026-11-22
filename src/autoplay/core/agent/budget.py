@@ -66,7 +66,10 @@ class Budget:
     call and `add()` after it. A call is only made when its worst case fits:
     the whole prompt billed at the dearest input rate plus a reply of
     `reply_limit()` tokens. The caller must send the call with that limit as
-    its `max_tokens`; then `spent_usd` does not pass `max_usd`."""
+    its `max_tokens`. Then `spent_usd` does not pass `max_usd` as long as the
+    prompt is billed at no more than COUNT_MARGIN times its counted size: the
+    count is the API's own, but nothing enforces that margin. `overrun_usd`
+    says by how much the limit was passed if it ever was."""
 
     def __init__(
         self, model: str, max_usd: float, max_calls: int, max_tokens: int
@@ -88,6 +91,10 @@ class Budget:
         return min(
             self.max_tokens, max(REPLY_FLOOR, REPLY_GROWTH * self._longest_reply)
         )
+
+    @property
+    def overrun_usd(self) -> float:
+        return max(0.0, self.spent_usd - self.max_usd)
 
     def worst_case_usd(self, input_tokens: int) -> float:
         """The most a call with a prompt counted at `input_tokens` can cost."""

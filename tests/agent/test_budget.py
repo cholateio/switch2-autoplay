@@ -116,3 +116,14 @@ def test_a_run_of_small_replies_gets_close_to_its_limit_and_never_past_it():
         assert budget.spent_usd + cost_usd(budget.model, worst) <= 1.0
         budget.add(usage)
     assert 0.90 <= budget.spent_usd <= 1.0
+
+
+def test_a_prompt_billed_far_above_its_count_shows_as_an_overrun():
+    budget = Budget("claude-opus-5-5", 0.10, 100, 1000)
+    budget.reserve(1000)
+    assert budget.overrun_usd == 0.0
+    # Counted at 1000 tokens, billed at 40 000: the margin did not hold.
+    budget.add(Usage(input_tokens=40_000, output_tokens=100))
+    assert budget.overrun_usd == pytest.approx(0.162 - 0.10)
+    with pytest.raises(BudgetExceeded):
+        budget.reserve(1000)
