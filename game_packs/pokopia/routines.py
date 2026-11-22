@@ -206,13 +206,16 @@ def magnet_on(hands):
         raise RoutineStopped(
             "Magnet Rise is not among the moves", step="select the move"
         )
-    hands.press("ZR")
-    hands.wait(2500)
-    if hands.context() != "placing":
-        raise RoutineStopped(
-            "the transformation did not start (PP may be empty)", step="ZR"
-        )
-    return "transformed; nothing in hand"
+    # A press right after another program left the gamepad is sometimes lost.
+    for _ in range(2):
+        hands.press("ZR")
+        for _ in range(8):
+            hands.wait(500)
+            if hands.context() == "placing":
+                return "transformed; nothing in hand"
+    raise RoutineStopped(
+        "the transformation did not start (PP may be empty)", step="ZR"
+    )
 
 
 def _untransform(hands) -> str:
@@ -248,7 +251,11 @@ def _untransform(hands) -> str:
     raise RoutineStopped("did not return to explore", step="confirm")
 
 
-@routine("End Magnet Rise: empties the hand if needed, R, confirms, ends in explore.")
+@routine(
+    "End Magnet Rise: empties the hand if needed, R, confirms, ends in explore. "
+    "The character may face another way afterwards: call face_away before the "
+    "next placing or breaking."
+)
 def magnet_off(hands):
     return _untransform(hands)
 
@@ -280,9 +287,10 @@ def _gate(hands) -> tuple[bool, str]:
     frame = hands.frame()
     if not _prompt(hands, frame, "break"):
         return False, (
-            "no 'Y 破壞' prompt: nothing is targeted (wrong height, no block in "
-            "front, or a Pokémon next to you has the target and the screen shows "
-            "'A 交談')"
+            "no 'Y 破壞' prompt: nothing is targeted. Usual causes: the character "
+            "does not face the block (the facing changes when Magnet Rise ends: "
+            "call face_away), it is not in front of the block, the height is "
+            "wrong, or a Pokémon beside you has the target ('A 交談' on screen)"
         )
     box = checks.outline(frame)
     if box is None:
@@ -361,24 +369,6 @@ def break_column(hands, count):
                     break
                 hands.press("L", 150)
                 hands.wait(500)
-            else:
-                # Nothing targeted all the way down. Seen with the follower
-                # Pokémon standing beside the block: it takes the target. Back
-                # off two cells and return (in the side view, back is screen
-                # right), then use the measured bottom-layer recipe.
-                for dx in (1.0, 1.0, -1.0, -1.0):
-                    hands.combo("ZL", STEP_MS, stick=("L", dx, 0.0))
-                    hands.wait(500)
-                for _ in range(4):
-                    hands.press("L", RISE_MS)
-                hands.press("B", RISE_MS)
-                hands.press("B", RISE_MS)
-                hands.wait(400)
-                for _ in range(4):
-                    if _gate(hands)[0]:
-                        break
-                    hands.press("L", 150)
-                    hands.wait(500)
             try:
                 _break(hands, f"block {block}")
             except RoutineStopped as stop:
