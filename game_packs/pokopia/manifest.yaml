@@ -16,3 +16,5 @@ forbidden:
   bag: [PLUS]
   storage: [PLUS, Y]
   main_menu: [MINUS]
+routines: routines.py
+on_stop: leave
