@@ -349,6 +349,7 @@ def break_column(hands, count):
     # From behind, the character hides the lower half of the outline.
     hands.stick("R", 1.0, 0.0, YAW_MS)
     hands.wait(300)
+    steep = False
     try:
         for block in range(1, count + 1):
             for _ in range(7):
@@ -356,6 +357,14 @@ def break_column(hands, count):
                     break
                 hands.press("L", 150)
                 hands.wait(500)
+            else:
+                # The bottom layer: the measured recipe is one step above the
+                # ground with the steep pitch.
+                for _ in range(4):
+                    hands.press("L", RISE_MS)
+                hands.press("B", RISE_MS)
+                _pitch(hands, PITCH["build"])
+                steep = True
             try:
                 _break(hands, f"block {block}")
             except RoutineStopped as stop:
@@ -366,6 +375,8 @@ def break_column(hands, count):
             hands.wait(500)
     finally:
         hands.stick("R", -1.0, 0.0, YAW_MS)
+        if steep:
+            _pitch(hands, PITCH["mid"])
     return f"broke {count}, top down"
 
 
