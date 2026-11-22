@@ -56,7 +56,7 @@
 | 拆一面牆 | `break_wall`（寬、層數）；站在最左邊那一欄前面、面向它 |
 | 變身、解除 | `magnet_on`、`magnet_off` |
 | 調高度 | `ground`（降到貼地）、`rise`（往上幾級） |
-| 拆身前一塊 | `break_front` |
+| 拆身前一塊 | `break_front`（shape 用 block；收壁飾用 low）。變身中不能直接按 `Y`，只能用它 |
 | 拆身前一欄 | `break_column`（由上往下；先升到比頂高；從最左邊那一欄做起） |
 | 補 PP | `eat_berries`（蘋野果已吃完，目前不能用） |
 

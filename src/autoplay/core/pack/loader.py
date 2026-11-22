@@ -16,7 +16,7 @@ MANIFEST = "manifest.yaml"
 # In `forbidden`, the buttons refused in every context.
 EVERYWHERE = "*"
 _KEYS = {"name", "home_context", "guide", "states_file", "forbidden"}
-_OPTIONAL = {"forbidden", "confirm", "routines", "on_stop"}
+_OPTIONAL = {"forbidden", "confirm", "checked", "routines", "on_stop"}
 
 
 class PackError(ValueError):
@@ -30,7 +30,9 @@ class GamePack:
     `forbidden` maps each context that has an entry to the buttons refused
     there, the ones refused everywhere included; ask `forbidden_in`.
     `confirm` maps a context or an overlay to the buttons that are sent there
-    only with a stated confirmation. `on_stop` names the routine run once when
+    only with a stated confirmation. `checked` maps a context to the buttons
+    sent there only together with a picture requirement, which only a routine
+    can give. `on_stop` names the routine run once when
     a run ends."""
 
     name: str
@@ -44,6 +46,7 @@ class GamePack:
     forbidden_everywhere: frozenset[str] = frozenset()
     overlays: StateRegistry = field(default_factory=StateRegistry)
     confirm: dict[str, frozenset[str]] = field(default_factory=dict)
+    checked: dict[str, frozenset[str]] = field(default_factory=dict)
     routines: dict[str, Routine] = field(default_factory=dict)
     on_stop: str | None = None
 
@@ -131,6 +134,8 @@ def load_pack(path: Path) -> GamePack:
           <context>: [BUTTON, ...]
         confirm:                          # optional
           <context or overlay>: [BUTTON, ...]
+        checked:                          # optional
+          <context>: [BUTTON, ...]        # only from a routine, with a check
         routines: <file>                  # optional, Python, see routines.py
         on_stop: <routine name>           # optional, takes no arguments
 
@@ -219,6 +224,18 @@ def load_pack(path: Path) -> GamePack:
             )
         confirm[where] = _buttons(source, where, raw)
 
+    raw_checked = data.get("checked") or {}
+    if not isinstance(raw_checked, dict):
+        raise PackError(f"{source}: checked must map contexts to button lists")
+    checked: dict[str, frozenset[str]] = {}
+    for where, raw in raw_checked.items():
+        if where not in contexts:
+            raise PackError(
+                f"{source}: checked names context {where!r}, which is not a "
+                f"state; the states are {contexts}"
+            )
+        checked[where] = _buttons(source, where, raw)
+
     routines: dict[str, Routine] = {}
     if data.get("routines") is not None:
         routines_path = _inside(root, data["routines"], "routines")
@@ -237,6 +254,7 @@ def load_pack(path: Path) -> GamePack:
     return GamePack(
         overlays=overlays,
         confirm=confirm,
+        checked=checked,
         routines=routines,
         on_stop=on_stop,
         name=name,

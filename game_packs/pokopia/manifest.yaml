@@ -18,5 +18,7 @@ forbidden:
   main_menu: [MINUS]
 confirm:
   choice: [A]
+checked:
+  placing: [Y]
 routines: routines.py
 on_stop: leave

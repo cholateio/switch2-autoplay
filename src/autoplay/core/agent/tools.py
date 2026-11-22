@@ -15,7 +15,7 @@ from autoplay.core.capture.base import CaptureError, Frame
 from autoplay.core.controller.base import BUTTON_NAMES, UnknownButton
 from autoplay.core.memory.lessons import Lesson
 from autoplay.core.memory.notes import NotesFull
-from autoplay.core.pack.guard import ForbiddenInput, NeedsConfirmation
+from autoplay.core.pack.guard import ForbiddenInput, NeedsCheck, NeedsConfirmation
 from autoplay.core.pack.hands import Hands
 from autoplay.core.pack.loader import PackError
 from autoplay.core.pack.routines import Routine, RoutineStopped
@@ -347,6 +347,11 @@ def _guarded(session: Session, name: str, run: Callable[[dict], ToolOutput]):
         except NeedsConfirmation as exc:
             session.log.event(
                 "needs_confirmation", tool=name, button=exc.button, where=exc.context
+            )
+            return _fail(f"Not sent: {exc}.")
+        except NeedsCheck as exc:
+            session.log.event(
+                "needs_check", tool=name, button=exc.button, context=exc.context
             )
             return _fail(f"Not sent: {exc}.")
         except ForbiddenInput as exc:

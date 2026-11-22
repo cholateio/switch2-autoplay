@@ -440,3 +440,29 @@ def test_a_keyword_only_declared_argument_is_fine(tmp_path):
     )
     pack = load_pack(pack_with(tmp_path, code))
     assert pack.routines["tap"].run(None, times=2) == "2"
+
+
+def test_a_checked_button_goes_out_only_with_a_picture_requirement(tmp_path):
+    from autoplay.core.pack.guard import NeedsCheck
+
+    pack = load_pack(pack_with(tmp_path, checked={"explore": ["Y"]}))
+    source, pad, log = (
+        FakeScreen("explore"),
+        DummyController(),
+        RunLog("t", tmp_path / "r"),
+    )
+    guard = InputGuard(pack, source, pad, log)
+    with pytest.raises(NeedsCheck, match="only by a routine"):
+        guard.press("Y")
+    with pytest.raises(ForbiddenInput):
+        guard.combo("ZL", 100, button="Y")
+    with pytest.raises(ForbiddenInput):
+        guard.combo("Y", 100, stick=("L", 1.0, 0.0))
+    assert pad.log == []
+    assert guard.press("Y", require=lambda bgr: True) == "explore"
+    assert pad.log != []
+    # In another context the button is an ordinary one.
+    source.show("bag")
+    assert guard.press("Y") == "bag"
+    with pytest.raises(PackError, match="not a state"):
+        load_pack(write_pack(tmp_path / "b", checked={"nowhere": ["Y"]}))

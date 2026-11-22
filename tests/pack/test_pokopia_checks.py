@@ -239,6 +239,7 @@ class WrongPlace:
     [
         ("ground", {}),
         ("rise", {"steps": 2}),
+        ("break_front", {"shape": "block"}),
         ("break_column", {"count": 2}),
         ("break_wall", {"width": 2, "layers": 1}),
     ],

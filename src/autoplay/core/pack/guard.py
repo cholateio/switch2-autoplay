@@ -53,6 +53,20 @@ class UnexpectedPicture(ForbiddenInput):
         self.context = context
 
 
+class NeedsCheck(ForbiddenInput):
+    """A button was refused because the pack lets it through here only
+    together with a picture requirement, which a routine supplies."""
+
+    def __init__(self, button: str, context: str | None) -> None:
+        RuntimeError.__init__(
+            self,
+            f"button {button} is sent in context {context!r} only by a routine "
+            "that checks the picture first; use that routine",
+        )
+        self.button = button
+        self.context = context
+
+
 class InputGuard:
     """The only way a run reaches the gamepad: every input is checked against
     the buttons the pack forbids in the context on screen, and logged.
@@ -156,6 +170,9 @@ class InputGuard:
         if button in self._pack.forbidden_in(context):
             self._event(REFUSED, **fields)
             raise ForbiddenInput(button, context)
+        if require is None and button in self._pack.checked.get(context or "", ()):
+            self._event(REFUSED, needs_check=True, **fields)
+            raise NeedsCheck(button, context)
         where = self._confirm_where(button, context)
         if where is not None:
             if not confirm:
@@ -272,16 +289,21 @@ class InputGuard:
     def _never_held(self) -> frozenset[str]:
         """The buttons some context forbids or wants confirmed."""
         pack = self._pack
-        return pack.forbidden_in(None).union(*pack.confirm.values())
+        return pack.forbidden_in(None).union(
+            *pack.confirm.values(), *pack.checked.values()
+        )
 
     def _first_forbidden(self, names: list[str], context: str | None) -> str | None:
-        # A combo carries no confirmation, so it never sends a button that needs one.
+        # A combo carries no confirmation and no picture requirement, so it
+        # never sends a button that needs either.
         forbidden = self._pack.forbidden_in(context)
         return next(
             (
                 name
                 for name in names
-                if name in forbidden or self._confirm_where(name, context)
+                if name in forbidden
+                or self._confirm_where(name, context)
+                or name in self._pack.checked.get(context or "", ())
             ),
             None,
         )

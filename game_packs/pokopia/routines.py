@@ -23,6 +23,8 @@ RISE_MS = 300
 # Scores of the white lettering: the same prompt 0.99 to 1.0, another one at most 0.67.
 SEEN = 0.85
 STANDING = 130
+# A wall decoration seen from one cell back was outlined 92 px high.
+LOW = 60
 # The middle of the screen, where a change of height shows. One rise step
 # changed 0.07 to 0.19 of it (11 steps, two pitches); hovering in place 0.01.
 HEIGHT_ROI = (560, 140, 800, 800)
@@ -482,9 +484,10 @@ def rise(hands, steps):
     return f"rose {steps} steps"
 
 
-def _gate(hands, frame=None) -> tuple[bool, str]:
-    """Whether Y may be pressed: the break prompt and the outline of a block
-    that stands (not a flat ground cell, not half hidden) are both seen."""
+def _gate(hands, frame=None, tall: int = STANDING) -> tuple[bool, str]:
+    """Whether Y may be pressed: the break prompt and an outline at least
+    `tall` high are both seen. The default is a block that stands; a flat
+    ground cell and a half-hidden outline are lower."""
     frame = hands.frame() if frame is None else frame
     if not _prompt(hands, frame, "break"):
         return False, (
@@ -499,7 +502,7 @@ def _gate(hands, frame=None) -> tuple[bool, str]:
             False,
             "the prompt is there but no outline is visible (hidden by the character?)",
         )
-    if box[3] < STANDING:
+    if box[3] < tall:
         return (
             False,
             f"the outline is only {box[3]} px tall: a ground cell, or half hidden",
@@ -516,7 +519,7 @@ def _note(hands) -> bool:
     return score >= 0.7
 
 
-def _break(hands, step: str) -> None:
+def _break(hands, step: str, tall: int = STANDING) -> None:
     # A note from the break before lingers about 3 s and would pass for this one.
     for _ in range(30):
         if not _note(hands):
@@ -525,7 +528,7 @@ def _break(hands, step: str) -> None:
     else:
         raise RoutineStopped("the note of the last pick-up does not go away", step=step)
     for attempt in (1, 2):
-        ok, why = _gate(hands)
+        ok, why = _gate(hands, tall=tall)
         hands.log(routine="break", step=step, gate=ok, why=why)
         if not ok:
             raise RoutineStopped(f"Y not pressed: {why}", step=step)
@@ -533,7 +536,7 @@ def _break(hands, step: str) -> None:
             _press_if(
                 hands,
                 "Y",
-                lambda frame: _gate(hands, frame)[0],
+                lambda frame: _gate(hands, frame, tall)[0],
                 step,
                 "the outline or the prompt was gone when it was about to be sent",
             )
@@ -557,12 +560,18 @@ def _break(hands, step: str) -> None:
 
 @routine(
     "Magnet Rise, nothing in hand: break the one thing the dashed outline is on. "
-    "Y is pressed only when the break prompt and a standing block's outline are "
-    "seen, and the pick-up note must follow. It cannot tell your block from one "
-    "that was there before: look first. Use the side view for layer 1."
+    "This and break_column / break_wall are the only way to press Y while "
+    "transformed. Y is sent only when the break prompt and the outline are "
+    "seen, and the pick-up note must follow. shape block: the outline of a "
+    "standing block (use the side view for layer 1). shape low: also a low "
+    "outline, for a wall decoration seen from one cell back; a flat ground "
+    "cell has a low outline too, so look first and be sure the outline is on "
+    "the decoration. It cannot tell your block from one that was there before.",
+    shape=Param(str, choices=("block", "low")),
 )
-def break_front(hands):
-    _break(hands, "break")
+def break_front(hands, shape):
+    _in_placing(hands, "start")
+    _break(hands, "break", STANDING if shape == "block" else LOW)
     return "broke 1 and picked it up"
 
 
@@ -683,14 +692,24 @@ def eat_berries(hands, most):
 )
 def leave(hands):
     done = []
-    if hands.context() == "bag":
+    for _ in range(3):
+        if hands.context() != "bag":
+            break
         hands.press("B")
         hands.wait(900)
         done.append("closed the bag")
+    if hands.context() == "bag":
+        raise RoutineStopped("the bag does not close", step="close the bag")
     if hands.context() == "placing" or _confirm_open(hands):
         done.append(_untransform(hands))
     if hands.context() == "explore" and _prompt(hands, hands.frame(), "spit"):
         hands.press("R")
         hands.wait(700)
         done.append("put the item away")
-    return "; ".join(done) or "nothing to do"
+    context = hands.context()
+    if context != "explore":
+        raise RoutineStopped(
+            f"could not bring the game back to explore; it is in {context}",
+            step="check",
+        )
+    return "; ".join(dict.fromkeys(done)) or "nothing to do"

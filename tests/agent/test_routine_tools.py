@@ -320,3 +320,17 @@ def test_trimming_tells_the_budget_that_the_cache_is_gone(tmp_path):
     turns = [[("look", {})] for _ in range(12)] + [[("finish", {"summary": "ok"})]]
     run_agent(session, "goal", FakeModel(turns))
     assert len(edits) >= 1
+
+
+def test_the_model_cannot_press_a_checked_button_itself(tmp_path):
+    session = session_with(tmp_path, checked={"explore": ["Y"]})
+    turn = [("press", {"button": "Y"})]
+    combo = [("combo", {"hold": "ZL", "button": "Y", "ms": 100})]
+    model = FakeModel([turn, combo, [("finish", {"summary": "ok"})]])
+    assert run_agent(session, "goal", model).reason == "done"
+    assert (
+        model.results(2)[0]["is_error"]
+        and "routine" in model.results(2)[0]["content"][0]["text"]
+    )
+    assert model.results(3)[0]["is_error"]
+    assert [e["outcome"] for e in events(session, "input")] == ["refused", "refused"]
