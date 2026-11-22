@@ -1,5 +1,7 @@
 from dataclasses import dataclass
 
+from autoplay.core import clock
+
 
 @dataclass(frozen=True)
 class Price:
@@ -24,6 +26,8 @@ COUNT_MARGIN = 1.05
 # and never less than the floor: room for a turn that thinks longer.
 REPLY_GROWTH = 4
 REPLY_FLOOR = 1500
+# A cache entry lives 5 minutes from its last use; past this a read is not assumed.
+CACHE_TRUST_S = 240.0
 
 
 @dataclass(frozen=True)
@@ -64,11 +68,15 @@ class BudgetExceeded(RuntimeError):
 class Budget:
     """The spending limits of one run. `reserve()` goes before every model
     call and `add()` after it. A call is only made when its worst case fits:
-    the whole prompt billed at the dearest input rate plus a reply of
-    `reply_limit()` tokens. The caller must send the call with that limit as
+    the prompt plus a reply of `reply_limit()` tokens. The part of the prompt
+    that the call before read from the cache is priced as a cache read, as
+    long as that call is recent and `history_edited()` was not called since;
+    the rest is priced at the dearest input rate. The caller must send the call with that limit as
     its `max_tokens`. Then `spent_usd` does not pass `max_usd` as long as the
-    prompt is billed at no more than COUNT_MARGIN times its counted size: the
-    count is the API's own, but nothing enforces that margin. `overrun_usd`
+    prompt is billed at no more than COUNT_MARGIN times its counted size and
+    the prefix read from the cache last time is read from it again. Neither
+    is enforced by the API: the count is its own estimate, and a cache entry
+    can be missed. `overrun_usd`
     says by how much the limit was passed if it ever was."""
 
     def __init__(
@@ -82,6 +90,13 @@ class Budget:
         self.spent_usd = 0.0
         self.calls = 0
         self._longest_reply = 0
+        self._cached_tokens = 0
+        self._cached_at = 0.0
+
+    def history_edited(self) -> None:
+        """Tell the budget that earlier turns were changed: what was cached of
+        them will not be read again."""
+        self._cached_tokens = 0
 
     def reply_limit(self) -> int:
         """The `max_tokens` the next call is to be sent with: a full-length
@@ -101,8 +116,12 @@ class Budget:
         dearest = max(
             self._price.input, self._price.cache_read, self._price.cache_write
         )
+        cached = 0
+        if clock.now() - self._cached_at <= CACHE_TRUST_S:
+            cached = min(self._cached_tokens, input_tokens)
         return (
-            input_tokens * COUNT_MARGIN * dearest
+            cached * self._price.cache_read
+            + (input_tokens * COUNT_MARGIN - cached) * dearest
             + self.reply_limit() * self._price.output
         ) / 1_000_000
 
@@ -126,4 +145,8 @@ class Budget:
         self.spent_usd += cost
         self.calls += 1
         self._longest_reply = max(self._longest_reply, usage.output_tokens)
+        # Only what was read: a part written this time has not yet proved it
+        # can be read back.
+        self._cached_tokens = usage.cache_read_tokens
+        self._cached_at = clock.now()
         return cost

@@ -373,3 +373,29 @@ def test_the_requirement_is_checked_on_the_newest_frame_last(tmp_path):
     source.late = screen("explore", shade=210)
     source.calls = 0
     assert guard.press("A", require=lambda bgr: bool(bgr[0, 0, 0] > 100)) == "explore"
+
+
+@pytest.mark.parametrize(
+    "definition",
+    [
+        "def leave(hands, required):\n    return ''",
+        "def leave():\n    return ''",
+        "def leave(hands, *rest):\n    return ''",
+    ],
+)
+def test_a_routine_whose_signature_does_not_fit_fails_when_the_pack_loads(
+    tmp_path, definition
+):
+    code = f"from autoplay.core.pack.routines import routine\n@routine('go home')\n{definition}\n"
+    root = pack_with(tmp_path, code, on_stop="leave")
+    with pytest.raises(PackError, match="must be defined as leave\\(hands\\)"):
+        load_pack(root)
+
+
+def test_declared_arguments_must_be_the_functions_arguments(tmp_path):
+    code = (
+        "from autoplay.core.pack.routines import Param, routine\n"
+        "@routine('x', times=Param(int, 1, 3))\ndef tap(hands, count):\n    return ''\n"
+    )
+    with pytest.raises(PackError, match="tap\\(hands, times\\)"):
+        load_pack(pack_with(tmp_path, code))

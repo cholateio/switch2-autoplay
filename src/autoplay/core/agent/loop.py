@@ -191,7 +191,8 @@ def _converse(
     messages: list[dict] = [{"role": "user", "content": _first_message(session, goal)}]
     while True:
         _check_stop(session)
-        trim_pictures(messages, session.config.keep_screenshots)
+        if trim_pictures(messages, session.config.keep_screenshots):
+            session.budget.history_edited()
         # The whole prompt is counted, so the reserve is a bound and not a guess.
         session.budget.reserve(client.count_tokens(system, definitions, messages))
         started = clock.now()

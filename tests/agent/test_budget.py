@@ -100,22 +100,60 @@ def test_the_reply_reserve_follows_the_replies_seen():
     assert budget.reply_limit() == 3000
 
 
-def test_a_run_of_small_replies_gets_close_to_its_limit_and_never_past_it():
-    # Token counts of the size an M4 run has with the history trimmed: about
-    # 12 000 prompt tokens, mostly read from the cache, and replies of 300.
+@pytest.mark.parametrize("prompt", [12_000, 25_000, 40_000])
+def test_a_run_of_small_replies_gets_close_to_its_limit_and_never_past_it(prompt):
+    # Prompts of the sizes M4 runs have, mostly read from the cache, replies of 300.
     budget = Budget("claude-opus-5-5", 1.0, 10_000, 3000)
-    usage = Usage(input_tokens=1500, output_tokens=300, cache_read_tokens=10_500)
+    read = prompt - 1500
+    usage = Usage(input_tokens=1500, output_tokens=300, cache_read_tokens=read)
     while True:
         try:
-            budget.reserve(12_000)
+            budget.reserve(prompt)
         except BudgetExceeded:
             break
-        # The worst the call could have cost, had nothing come from the cache
-        # and the reply run to its limit, still fits.
-        worst = Usage(0, budget.reply_limit(), 0, int(12_000 * 1.05))
-        assert budget.spent_usd + cost_usd(budget.model, worst) <= 1.0
+        # The worst the call can cost while the cached prefix is read again:
+        # the rest at the dearest rate and the reply run to its limit.
+        cached = read if budget.calls else 0
+        worst = Usage(
+            output_tokens=budget.reply_limit(),
+            cache_read_tokens=cached,
+            cache_write_tokens=int(prompt * 1.05) - cached,
+        )
+        assert budget.spent_usd + cost_usd(budget.model, worst) <= 1.0 + 1e-9
         budget.add(usage)
     assert 0.90 <= budget.spent_usd <= 1.0
+
+
+def test_the_cached_prefix_is_priced_as_a_read_only_while_that_can_be_assumed(
+    monkeypatch,
+):
+    from autoplay.core import clock
+
+    now = [1000.0]
+    monkeypatch.setattr(clock, "now", lambda: now[0])
+    budget = Budget("claude-opus-5-5", 5.0, 100, 3000)
+    full = budget.worst_case_usd(20_000)
+    budget.add(Usage(input_tokens=2000, output_tokens=300, cache_read_tokens=18_000))
+    cheap = budget.worst_case_usd(20_000)
+    # 18 000 tokens at the read rate instead of the write rate, and a shorter reply.
+    assert cheap == pytest.approx(
+        (18_000 * 0.20 + (21_000 - 18_000) * 5.0 + 1500 * 20.0) / 1e6
+    )
+    assert cheap < full / 2
+    budget.history_edited()
+    assert budget.worst_case_usd(20_000) == pytest.approx(
+        (21_000 * 5.0 + 1500 * 20.0) / 1e6
+    )
+    budget.add(Usage(input_tokens=2000, output_tokens=300, cache_read_tokens=18_000))
+    now[0] += 241
+    assert budget.worst_case_usd(20_000) == pytest.approx(
+        (21_000 * 5.0 + 1500 * 20.0) / 1e6
+    )
+    # A prompt smaller than what was read is not credited with more than itself.
+    now[0] -= 241
+    assert budget.worst_case_usd(1000) == pytest.approx(
+        (1000 * 0.20 + 50 * 5.0 + 1500 * 20.0) / 1e6
+    )
 
 
 def test_a_prompt_billed_far_above_its_count_shows_as_an_overrun():

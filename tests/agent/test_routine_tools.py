@@ -311,3 +311,12 @@ def test_an_overrun_is_logged(tmp_path):
     assert run_agent(session, "goal", model).reason == "budget"
     (overrun,) = events(session, "budget_overrun")
     assert overrun["usd"] > 0
+
+
+def test_trimming_tells_the_budget_that_the_cache_is_gone(tmp_path):
+    session = session_with(tmp_path)
+    edits = []
+    session.budget.history_edited = lambda: edits.append(len(edits))
+    turns = [[("look", {})] for _ in range(12)] + [[("finish", {"summary": "ok"})]]
+    run_agent(session, "goal", FakeModel(turns))
+    assert len(edits) >= 1

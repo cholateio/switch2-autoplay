@@ -23,6 +23,10 @@ RISE_MS = 300
 # Scores of the white lettering: the same prompt 0.99 to 1.0, another one at most 0.67.
 SEEN = 0.85
 STANDING = 130
+# The middle of the screen, where a change of height shows. One rise step
+# changed 0.07 to 0.19 of it (11 steps, two pitches); hovering in place 0.01.
+HEIGHT_ROI = (560, 140, 800, 800)
+RISEN = 0.04
 CONFIRM_ROI = (380, 880, 760, 120)
 NOTE_PP_ROI = (700, 440, 540, 240)
 BERRY_ROI = (438, 195, 90, 90)
@@ -310,8 +314,7 @@ def place_wall(hands, width, layers):
     done = 0
     for layer in range(1, layers + 1):
         if layer > 2:
-            hands.press("B", RISE_MS)
-            hands.wait(500)
+            _ascend(hands, 1)
         try:
             done += _line(hands, "e" if layer % 2 else "w", width, item)
         except RoutineStopped as stop:
@@ -405,24 +408,54 @@ def magnet_off(hands):
     return _untransform(hands)
 
 
-@routine("Magnet Rise: descend until the character is at ground level.")
-def ground(hands):
-    for _ in range(4):
+def _in_placing(hands, step: str) -> None:
+    context = hands.context()
+    if context != "placing":
+        raise RoutineStopped(
+            f"needs Magnet Rise (the placing context), not {context}", step=step
+        )
+
+
+def _descend(hands) -> None:
+    for press in range(1, 5):
+        _in_placing(hands, f"descend {press}")
         hands.press("L", RISE_MS)
     hands.wait(300)
+
+
+def _ascend(hands, steps: int) -> None:
+    """Rise `steps` times, each one seen on the picture: a press that is lost,
+    or a ceiling, would shift every layer aimed at afterwards."""
+    for step in range(1, steps + 1):
+        _in_placing(hands, f"rise {step}")
+        before = _still(hands)
+        hands.press("B", RISE_MS)
+        hands.wait(400)
+        change = checks.changed_fraction(before, hands.frame(), HEIGHT_ROI)
+        hands.log(routine="rise", step=step, change=round(change, 3))
+        if change < RISEN:
+            raise RoutineStopped(
+                f"the picture did not move when rising (change {change:.3f}); "
+                f"{step - 1} steps risen. The height is not what was asked for",
+                step=f"rise {step}",
+            )
+    hands.wait(300)
+
+
+@routine("Magnet Rise: descend until the character is at ground level.")
+def ground(hands):
+    _descend(hands)
     return "at ground level"
 
 
 @routine(
-    "Magnet Rise: rise by `steps` (about 0.9 layer each). Count from ground "
-    "level: call `ground` first when the height matters.",
+    "Magnet Rise: rise by `steps` (about 0.9 layer each), each step checked on "
+    "the picture. Count from ground level: call `ground` first when the height "
+    "matters.",
     steps=Param(int, 1, 8),
 )
 def rise(hands, steps):
-    for _ in range(steps):
-        hands.press("B", RISE_MS)
-        hands.wait(200)
-    hands.wait(300)
+    _ascend(hands, steps)
     return f"rose {steps} steps"
 
 
@@ -555,12 +588,8 @@ def break_wall(hands, width, layers):
         if column > 1:
             hands.combo("ZL", STEP_MS, stick=("L", 1.0, 0.0))
             hands.wait(500)
-        for _ in range(4):
-            hands.press("L", RISE_MS)
-        for _ in range(layers + 1):
-            hands.press("B", RISE_MS)
-            hands.wait(200)
-        hands.wait(300)
+        _descend(hands)
+        _ascend(hands, layers + 1)
         try:
             break_column(hands, layers)
         except RoutineStopped as stop:

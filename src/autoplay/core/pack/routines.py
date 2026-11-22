@@ -1,4 +1,5 @@
 import importlib.util
+import inspect
 import itertools
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -129,5 +130,24 @@ def load_routines(path: Path) -> dict[str, Routine]:
                     f"{path}: routine {name!r} argument {key!r} must be a Param of "
                     "int, float or str"
                 )
+        expected = ["hands", *params]
+        try:
+            takes = [
+                p.name
+                for p in inspect.signature(value).parameters.values()
+                if p.kind
+                in (p.POSITIONAL_ONLY, p.POSITIONAL_OR_KEYWORD, p.KEYWORD_ONLY)
+                and p.default is p.empty
+            ]
+            accepts = list(inspect.signature(value).parameters)
+        except (TypeError, ValueError) as exc:
+            raise RoutineError(f"{path}: routine {name!r}: {exc}") from exc
+        if takes != expected or accepts != expected:
+            # Found now and not when the routine is first called, which for
+            # an on_stop routine is when a run is already ending.
+            raise RoutineError(
+                f"{path}: routine {name!r} must be defined as "
+                f"{name}({', '.join(expected)}), got ({', '.join(accepts)})"
+            )
         found[name] = Routine(name, description, value, dict(params))
     return found
