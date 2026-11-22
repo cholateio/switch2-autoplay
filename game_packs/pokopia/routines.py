@@ -135,7 +135,8 @@ def _in_hand(hands, frame) -> str | None:
 @routine(
     "Place a line of blocks: one in the cell in front, step one cell sideways, "
     "the next, and so on. direction e is screen right, w screen left. Needs an "
-    "item in hand, the character facing away from the camera, quantity 1. Sets "
+    "item in hand, the character facing away from the camera, quantity 1, and "
+    "the camera square to the grid (a row of blocks looks level on screen). Sets "
     "the mid view. Each block is confirmed on the picture and retried once. "
     "Called again at the end of a line, in the other direction, it puts the "
     "next layer on top (up to layer 2 from the ground; rise first for more).",
@@ -278,7 +279,11 @@ def _gate(hands) -> tuple[bool, str]:
     that stands (not a flat ground cell, not half hidden) are both seen."""
     frame = hands.frame()
     if not _prompt(hands, frame, "break"):
-        return False, "no 'Y 破壞' prompt: nothing is targeted"
+        return False, (
+            "no 'Y 破壞' prompt: nothing is targeted (wrong height, no block in "
+            "front, or a Pokémon next to you has the target and the screen shows "
+            "'A 交談')"
+        )
     box = checks.outline(frame)
     if box is None:
         return (
@@ -349,7 +354,6 @@ def break_column(hands, count):
     # From behind, the character hides the lower half of the outline.
     hands.stick("R", 1.0, 0.0, YAW_MS)
     hands.wait(300)
-    steep = False
     try:
         for block in range(1, count + 1):
             for _ in range(7):
@@ -358,13 +362,23 @@ def break_column(hands, count):
                 hands.press("L", 150)
                 hands.wait(500)
             else:
-                # The bottom layer: the measured recipe is one step above the
-                # ground with the steep pitch.
+                # Nothing targeted all the way down. Seen with the follower
+                # Pokémon standing beside the block: it takes the target. Back
+                # off two cells and return (in the side view, back is screen
+                # right), then use the measured bottom-layer recipe.
+                for dx in (1.0, 1.0, -1.0, -1.0):
+                    hands.combo("ZL", STEP_MS, stick=("L", dx, 0.0))
+                    hands.wait(500)
                 for _ in range(4):
                     hands.press("L", RISE_MS)
                 hands.press("B", RISE_MS)
-                _pitch(hands, PITCH["build"])
-                steep = True
+                hands.press("B", RISE_MS)
+                hands.wait(400)
+                for _ in range(4):
+                    if _gate(hands)[0]:
+                        break
+                    hands.press("L", 150)
+                    hands.wait(500)
             try:
                 _break(hands, f"block {block}")
             except RoutineStopped as stop:
@@ -375,8 +389,6 @@ def break_column(hands, count):
             hands.wait(500)
     finally:
         hands.stick("R", -1.0, 0.0, YAW_MS)
-        if steep:
-            _pitch(hands, PITCH["mid"])
     return f"broke {count}, top down"
 
 
