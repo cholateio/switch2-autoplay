@@ -230,6 +230,7 @@ The 25 runs made 127 model calls and cost US$1.79.
 - **The pad becomes player 1.** While it is plugged into the dock, a single-player game listens to it and ignores the Joy-Con. To play by hand, unplug the OTG cable from the dock.
 - **The first press after the console wakes only registers the pad.** The HOME menu shows the controller icon and the cursor does not move; presses after that work. Send one throw-away press before an automated run.
 - **A console woken from sleep shows a lock screen ("A 繼續"), and the capture card may show its own "No Signal" picture for a few seconds first.** A is safe there: it only leads to the HOME menu. Y opens the game news; avoid it.
+- **The pad cannot wake a sleeping console.** Left without input for about an hour the console sleeps (last press 20:59, "No Signal" at 22:01 on 2026-11-22). `ap pad` then fails with "the console is not polling the gamepad over USB", so no button reaches it; the owner has to wake it with the power button or their own controller.
 - **Never press A on the HOME menu without checking where the cursor is.** The bottom row holds Nintendo Switch Online and the eShop, which this project does not touch; take a screenshot and read the label first.
 
 - **`do_until` needs `heartbeat=pad.heartbeat`.** It can wait for seconds without touching the controller; without the heartbeat a held button is released after `lease_ms` and an emergency stop is not noticed until the next action.
