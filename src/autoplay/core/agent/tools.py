@@ -1,4 +1,5 @@
 import base64
+import contextlib
 import json
 import time
 from collections.abc import Callable
@@ -14,8 +15,10 @@ from autoplay.core.capture.base import CaptureError, Frame
 from autoplay.core.controller.base import BUTTON_NAMES, UnknownButton
 from autoplay.core.memory.lessons import Lesson
 from autoplay.core.memory.notes import NotesFull
-from autoplay.core.pack.guard import ForbiddenInput
+from autoplay.core.pack.guard import ForbiddenInput, NeedsConfirmation
+from autoplay.core.pack.hands import Hands
 from autoplay.core.pack.loader import PackError
+from autoplay.core.pack.routines import Routine, RoutineStopped
 from autoplay.core.perception.ops import picture_difference
 
 FINISH = "finish"
@@ -181,8 +184,9 @@ class _Toolbox:
     def press(self, args: dict) -> ToolOutput:
         button = _arg(args, "button", str)
         ms = _arg(args, "ms", int, None, 16, MAX_PRESS_MS)
+        confirm = _arg(args, "confirm", str, None)
         before = self.s.source.latest()
-        sent_in = self.s.guard.press(button, ms)
+        sent_in = self.s.guard.press(button, ms, confirm)
         return self._after_input(before, sent_in, pressed=button)
 
     def hold_stick(self, args: dict) -> ToolOutput:
@@ -222,6 +226,44 @@ class _Toolbox:
         except ValueError as exc:
             raise BadInput(str(exc)) from exc
         return self._after_input(before, sent_in, held=held, then=button or move)
+
+    def routine(self, routine: Routine, args: dict) -> ToolOutput:
+        """Run a pack routine. It reports text and one picture; a routine that
+        stops, or meets a refused input, is an error result naming the step.
+        Whatever else it raises ends the run, with the gamepad released."""
+        kwargs = routine.check_args(args)
+        s = self.s
+        hands = Hands(s.pack, s.guard, s.pad, s.source, s.log)
+        try:
+            result = routine.run(hands, **kwargs)
+        except (RoutineStopped, ForbiddenInput) as stop:
+            self._release()
+            return self._routine_output(
+                True,
+                routine=routine.name,
+                stopped_at=getattr(stop, "step", "") or "an input",
+                reason=str(stop),
+            )
+        except BaseException:
+            self._release()
+            raise
+        return self._routine_output(False, routine=routine.name, result=str(result))
+
+    def _release(self) -> None:
+        # After an emergency stop the gamepad refuses; the stop has released.
+        with contextlib.suppress(Exception):
+            self.s.pad.release_all()
+
+    def _routine_output(self, is_error: bool, **what) -> ToolOutput:
+        _, settled = self._settle()
+        context = self.s.guard.context()
+        return ToolOutput(
+            [
+                _say(**what, context_after=context or UNKNOWN, settled=settled),
+                self._picture(),
+            ],
+            is_error,
+        )
 
     def wait(self, args: dict) -> ToolOutput:
         ms = _arg(args, "ms", int, low=1, high=MAX_WAIT_MS)
@@ -296,6 +338,11 @@ def _guarded(session: Session, name: str, run: Callable[[dict], ToolOutput]):
     def call(args: dict) -> ToolOutput:
         try:
             return run(args)
+        except NeedsConfirmation as exc:
+            session.log.event(
+                "needs_confirmation", tool=name, button=exc.button, where=exc.context
+            )
+            return _fail(f"Not sent: {exc}.")
         except ForbiddenInput as exc:
             session.log.event(
                 "forbidden_input", tool=name, button=exc.button, context=exc.context
@@ -339,9 +386,11 @@ def build_tools(session: Session) -> list[Tool]:
             (
                 "Press one gamepad button and release it. `ms` is how long it is held "
                 f"(default: a short tap; at most {MAX_PRESS_MS}). {after} A button the "
-                "current context forbids is refused and not sent."
+                "current context forbids is refused and not sent. Where the game asks "
+                "you to choose, the button is sent only with `confirm`: the text of "
+                "the option you read on screen and mean to choose."
             ),
-            _schema({"button": button}, {"ms": integer}),
+            _schema({"button": button}, {"ms": integer, "confirm": text}),
             box.press,
         ),
         (
@@ -452,6 +501,25 @@ def build_tools(session: Session) -> list[Tool]:
             box.finish,
         ),
     ]
+    taken = {name for name, _, _, _ in specs}
+    for routine in session.pack.routines.values():
+        if routine.name in taken:
+            raise PackError(
+                f"pack {session.pack.name}: routine {routine.name!r} has the name of "
+                "a built-in tool"
+            )
+        specs.append(
+            (
+                routine.name,
+                (
+                    f"Routine of this game: {routine.description} It checks the picture "
+                    "at its own steps and reports the result with one screenshot; if "
+                    "it stops, it says at which step and why."
+                ),
+                _schema({key: param.schema() for key, param in routine.params.items()}),
+                lambda args, routine=routine: box.routine(routine, args),
+            )
+        )
     return [
         Tool(name, description, schema, _guarded(session, name, run))
         for name, description, schema, run in specs

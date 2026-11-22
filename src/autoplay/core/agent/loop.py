@@ -7,6 +7,7 @@ from autoplay.core.agent.budget import BudgetExceeded, Usage
 from autoplay.core.agent.session import Session
 from autoplay.core.agent.tools import FINISH, UNKNOWN, Tool, ToolOutput, build_tools
 from autoplay.core.controller.base import BUTTON_NAMES
+from autoplay.core.pack.hands import Hands
 from autoplay.core.runtime.estop import EmergencyStop
 
 DONE, BUDGET, ESTOP, ERROR = "done", "budget", "estop", "error"
@@ -53,7 +54,13 @@ class ModelClient(Protocol):
         ModelError when it cannot be counted."""
         ...
 
-    def send(self, system: str, tools: list[dict], messages: list[dict]) -> ModelReply:
+    def send(
+        self,
+        system: str,
+        tools: list[dict],
+        messages: list[dict],
+        max_tokens: int | None = None,
+    ) -> ModelReply:
         """Send the whole conversation and return the next turn; raise
         ModelError when no turn comes back."""
         ...
@@ -93,6 +100,9 @@ chapter for a context with `read_guide` before acting there for the first time. 
 Where the guide says something is not known, do not guess with an input that \
 could lose progress or items.
 - Button names are: {", ".join(BUTTON_NAMES)}.
+- Tools described as "Routine of this game" are fixed sequences that check the \
+picture at each step. Prefer one over doing the same thing input by input; when \
+one stops, look, fix what it reports, and go on from there.
 - Some buttons are refused in some contexts, and in a picture that is not \
 recognised. A refused input was not sent. That is a safety rule of this setup: \
 do not look for another way to reach the same effect.
@@ -138,6 +148,30 @@ def _result_block(call: ToolCall, output: ToolOutput) -> dict:
     return block
 
 
+DROPPED = "[screenshot dropped]"
+
+
+def trim_pictures(messages: list[dict], keep: int) -> int:
+    """Once more than `2 * keep` screenshots sit in the tool results, replace
+    all but the newest `keep` with a line of text, in place; return how many
+    were replaced. Assistant turns are never touched: they must come back to
+    the model unchanged."""
+    spots = [
+        (block["content"], index)
+        for message in messages
+        if message["role"] == "user" and isinstance(message["content"], list)
+        for block in message["content"]
+        if block.get("type") == "tool_result" and isinstance(block.get("content"), list)
+        for index, part in enumerate(block["content"])
+        if part.get("type") == "image"
+    ]
+    if len(spots) <= 2 * keep:
+        return 0
+    for content, index in spots[:-keep]:
+        content[index] = {"type": "text", "text": DROPPED}
+    return len(spots) - keep
+
+
 def _converse(
     session: Session, goal: str, client: ModelClient, tools: dict[str, Tool]
 ) -> tuple[str, str]:
@@ -147,10 +181,14 @@ def _converse(
     messages: list[dict] = [{"role": "user", "content": _first_message(session, goal)}]
     while True:
         _check_stop(session)
+        trim_pictures(messages, session.config.keep_screenshots)
         # The whole prompt is counted, so the reserve is a bound and not a guess.
         session.budget.reserve(client.count_tokens(system, definitions, messages))
         started = clock.now()
-        reply = client.send(system, definitions, messages)
+        # Sent with the reply length the reserve assumed, or it would not bound it.
+        reply = client.send(
+            system, definitions, messages, max_tokens=session.budget.reply_limit()
+        )
         usd = session.budget.add(reply.usage)
         session.log.event(
             "model_call",
@@ -222,6 +260,23 @@ def _wind_down(session: Session, reason: str) -> tuple[str, str | None]:
     return reason, context
 
 
+def _on_stop(session: Session) -> str | None:
+    """Run the pack's `on_stop` routine, which brings the game to a state it
+    can be left in, and return what it reported. Nothing in here raises."""
+    name = session.pack.on_stop
+    if name is None:
+        return None
+    try:
+        hands = Hands(
+            session.pack, session.guard, session.pad, session.source, session.log
+        )
+        return str(session.pack.routines[name].run(hands))
+    except (Exception, KeyboardInterrupt) as exc:  # noqa: BLE001
+        with contextlib.suppress(Exception, KeyboardInterrupt):
+            session.pad.release_all()
+        return f"failed: {type(exc).__name__}: {exc}"
+
+
 def run_agent(
     session: Session, goal: str, client: ModelClient | None = None
 ) -> RunResult:
@@ -248,6 +303,12 @@ def run_agent(
         reason, summary = ERROR, f"{type(exc).__name__}: {exc}"
     finally:
         reason, context = _wind_down(session, reason)
+        left = None
+        if reason != ESTOP:
+            left = _on_stop(session)
+            if left is not None:
+                # The routine moved the game; report where it is now.
+                reason, context = _wind_down(session, reason)
     result = RunResult(reason, summary, session.budget.calls, session.budget.spent_usd)
     _log(
         session,
@@ -255,6 +316,7 @@ def run_agent(
         reason=reason,
         goal=goal,
         context=context,
+        on_stop=left,
         model_calls=result.model_calls,
         usd=round(result.usd, 6),
         summary=summary[:_LOGGED_TEXT],

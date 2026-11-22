@@ -20,6 +20,10 @@ PRICES: dict[str, Price] = {
 
 # The counted prompt size is an estimate; reserve this much more.
 COUNT_MARGIN = 1.05
+# After the first call a reply may be this many times the longest one so far,
+# and never less than the floor: room for a turn that thinks longer.
+REPLY_GROWTH = 4
+REPLY_FLOOR = 1500
 
 
 @dataclass(frozen=True)
@@ -60,8 +64,9 @@ class BudgetExceeded(RuntimeError):
 class Budget:
     """The spending limits of one run. `reserve()` goes before every model
     call and `add()` after it. A call is only made when its worst case fits:
-    the whole prompt billed at the dearest input rate plus a full-length
-    reply, so `spent_usd` does not pass `max_usd`."""
+    the whole prompt billed at the dearest input rate plus a reply of
+    `reply_limit()` tokens. The caller must send the call with that limit as
+    its `max_tokens`; then `spent_usd` does not pass `max_usd`."""
 
     def __init__(
         self, model: str, max_usd: float, max_calls: int, max_tokens: int
@@ -73,6 +78,16 @@ class Budget:
         self.max_tokens = max_tokens
         self.spent_usd = 0.0
         self.calls = 0
+        self._longest_reply = 0
+
+    def reply_limit(self) -> int:
+        """The `max_tokens` the next call is to be sent with: a full-length
+        reply for the first call, afterwards bounded by the replies seen."""
+        if self.calls == 0:
+            return self.max_tokens
+        return min(
+            self.max_tokens, max(REPLY_FLOOR, REPLY_GROWTH * self._longest_reply)
+        )
 
     def worst_case_usd(self, input_tokens: int) -> float:
         """The most a call with a prompt counted at `input_tokens` can cost."""
@@ -80,7 +95,8 @@ class Budget:
             self._price.input, self._price.cache_read, self._price.cache_write
         )
         return (
-            input_tokens * COUNT_MARGIN * dearest + self.max_tokens * self._price.output
+            input_tokens * COUNT_MARGIN * dearest
+            + self.reply_limit() * self._price.output
         ) / 1_000_000
 
     def reserve(self, input_tokens: int) -> None:
@@ -102,4 +118,5 @@ class Budget:
         cost = cost_usd(self.model, usage)
         self.spent_usd += cost
         self.calls += 1
+        self._longest_reply = max(self._longest_reply, usage.output_tokens)
         return cost

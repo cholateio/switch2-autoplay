@@ -9,3 +9,7 @@ max_model_calls: 150
 screenshot_width: 1280
 jpeg_quality: 80
 notes_limit: 2000
+# Screenshots kept in the conversation. Once twice as many have piled up, the
+# oldest are replaced by a line of text, in one go so the cached prefix
+# changes rarely.
+keep_screenshots: 4

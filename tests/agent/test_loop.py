@@ -317,7 +317,7 @@ def test_large_prompt_is_refused_before_it_is_sent(tmp_path):
 
 def test_keyboard_interrupt_still_releases_and_reports(tmp_path):
     class Interrupted(FakeModel):
-        def send(self, system, tools, messages):
+        def send(self, system, tools, messages, max_tokens=None):
             raise KeyboardInterrupt
 
     session = make_session(tmp_path)
@@ -369,7 +369,7 @@ def test_a_failing_cleanup_does_not_hide_the_outcome(tmp_path):
 
 def test_model_and_hardware_failures_end_the_run_as_errors(tmp_path):
     class Broken(FakeModel):
-        def send(self, system, tools, messages):
+        def send(self, system, tools, messages, max_tokens=None):
             raise ModelError("RateLimitError: slow down")
 
     session = make_session(tmp_path / "a")

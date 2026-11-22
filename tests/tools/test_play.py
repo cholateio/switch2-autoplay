@@ -217,7 +217,7 @@ def test_emergency_stop_exit_code(pack, tmp_path, monkeypatch, capsys):
     recorder = Recorder(monkeypatch, tmp_path, [[("look", {})]] * 3)
     original = recorder.model.send
 
-    def send_then_stop(system, tools, messages):
+    def send_then_stop(system, tools, messages, max_tokens=None):
         reply = original(system, tools, messages)
         stops[0].trip()
         return reply

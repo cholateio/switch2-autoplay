@@ -29,6 +29,7 @@ class FakeModel:
         self.script = list(script)
         self.usage = usage or Usage(1000, 100, 0, 0)
         self.sent: list[list[dict]] = []
+        self.limits: list[int | None] = []
         self.systems: list[str] = []
         self.tools: list[list[dict]] = []
 
@@ -36,7 +37,8 @@ class FakeModel:
         self.counted += 1
         return self.prompt_tokens
 
-    def send(self, system, tools, messages) -> ModelReply:
+    def send(self, system, tools, messages, max_tokens=None) -> ModelReply:
+        self.limits.append(max_tokens)
         self.systems.append(system)
         self.tools.append(tools)
         self.sent.append(copy.deepcopy(messages))

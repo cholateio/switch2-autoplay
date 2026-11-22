@@ -87,3 +87,32 @@ def test_spending_never_passes_the_limit(growth, billed_as):
         assert budget.spent_usd <= budget.max_usd
         prompt = int(prompt * growth)
     assert budget.spent_usd <= budget.max_usd
+
+
+def test_the_reply_reserve_follows_the_replies_seen():
+    budget = Budget("claude-opus-5-5", 1.0, 100, 3000)
+    assert budget.reply_limit() == 3000
+    budget.add(Usage(1000, 200, 0, 0))
+    assert budget.reply_limit() == 1500
+    budget.add(Usage(1000, 500, 0, 0))
+    assert budget.reply_limit() == 2000
+    budget.add(Usage(1000, 2900, 0, 0))
+    assert budget.reply_limit() == 3000
+
+
+def test_a_run_of_small_replies_gets_close_to_its_limit_and_never_past_it():
+    # Token counts of the size an M4 run has with the history trimmed: about
+    # 12 000 prompt tokens, mostly read from the cache, and replies of 300.
+    budget = Budget("claude-opus-5-5", 1.0, 10_000, 3000)
+    usage = Usage(input_tokens=1500, output_tokens=300, cache_read_tokens=10_500)
+    while True:
+        try:
+            budget.reserve(12_000)
+        except BudgetExceeded:
+            break
+        # The worst the call could have cost, had nothing come from the cache
+        # and the reply run to its limit, still fits.
+        worst = Usage(0, budget.reply_limit(), 0, int(12_000 * 1.05))
+        assert budget.spent_usd + cost_usd(budget.model, worst) <= 1.0
+        budget.add(usage)
+    assert 0.90 <= budget.spent_usd <= 1.0

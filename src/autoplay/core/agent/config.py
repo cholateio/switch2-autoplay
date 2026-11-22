@@ -22,6 +22,7 @@ class AgentConfig:
     screenshot_width: int
     jpeg_quality: int
     notes_limit: int
+    keep_screenshots: int = 4
 
 
 def load_agent_config(path: Path | None = None) -> AgentConfig:
@@ -43,7 +44,12 @@ def load_agent_config(path: Path | None = None) -> AgentConfig:
     if not isinstance(data, dict):
         # A wrong file, not a wrong argument type.
         raise ValueError(f"{source}: expected a mapping of settings")  # noqa: TRY004
-    fields = {field.name: field.type for field in dataclasses.fields(AgentConfig)}
+    declared = dataclasses.fields(AgentConfig)
+    fields = {field.name: field.type for field in declared}
+    # A setting with a default may be left out of the file.
+    for field in declared:
+        if field.default is not dataclasses.MISSING:
+            data.setdefault(field.name, field.default)
     missing, unknown = (
         sorted(fields.keys() - data.keys()),
         sorted(str(key) for key in data.keys() - fields.keys()),

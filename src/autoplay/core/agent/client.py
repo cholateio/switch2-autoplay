@@ -51,12 +51,18 @@ class AnthropicModel:
             raise ModelError(f"{type(exc).__name__}: {exc}") from exc
         return counted.input_tokens
 
-    def send(self, system: str, tools: list[dict], messages: list[dict]) -> ModelReply:
+    def send(
+        self,
+        system: str,
+        tools: list[dict],
+        messages: list[dict],
+        max_tokens: int | None = None,
+    ) -> ModelReply:
         try:
             # No retries: a request whose reply was lost may still be billed,
             # and a second one would spend outside what the budget reserved.
             response = self._client.with_options(max_retries=0).messages.create(
-                max_tokens=self._config.max_tokens,
+                max_tokens=max_tokens or self._config.max_tokens,
                 **self._prompt(system, tools, messages),
             )
         except anthropic.APIError as exc:
