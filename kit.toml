@@ -7,6 +7,24 @@ protected = [              # no-touch globs (repo-relative, `*` crosses `/`). Pr
   # one entry per line, no inline comments on entry lines — a bash hook parses this block
 ]
 
+# Every uv check is --locked so that a run cannot rewrite uv.lock.
+# The fast lane leaves out test_pad_selftest.py and two sequence-number tests, which sleep on real timers
+# (about 17 s together); the slow lane runs exactly those.
+[verify.fast]
+lint = "uv run --locked ruff check ."
+format = "uv run --locked ruff format --check ."
+unit = "uv run --locked pytest -q --ignore=tests/controller/test_pad_selftest.py --deselect tests/controller/test_serial_backend.py::test_failed_states_cannot_wrap_seq_onto_a_remembered_one --deselect tests/controller/test_serial_backend.py::test_state_seqs_and_other_seqs_never_overlap"
+firmware-host = "make -C firmware/test_host test"
+
+# `windows` needs the Windows-side uv; UV_LOCKED reaches it through WSLENV.
+# `firmware` needs ESP-IDF at ~/esp/esp-idf (its export.sh needs bash). It builds in firmware/build-verify/ with
+# an sdkconfig regenerated from sdkconfig.defaults on every run, never the developer's firmware/sdkconfig;
+# SDKCONFIG_DEFAULTS is passed explicitly because ESP-IDF otherwise prefers an inherited environment variable.
+[verify.slow]
+controller-slow = "uv run --locked pytest -q tests/controller/test_pad_selftest.py tests/controller/test_serial_backend.py::test_failed_states_cannot_wrap_seq_onto_a_remembered_one tests/controller/test_serial_backend.py::test_state_seqs_and_other_seqs_never_overlap"
+windows = 'UV_LOCKED=1 WSLENV="UV_LOCKED${WSLENV:+:$WSLENV}" scripts/win pytest -q'
+firmware = "bash -c '. ~/esp/esp-idf/export.sh >/dev/null 2>&1 && cd firmware && rm -f build-verify/sdkconfig && idf.py -B build-verify -D SDKCONFIG=build-verify/sdkconfig -D SDKCONFIG_DEFAULTS=sdkconfig.defaults build'"
+
 # [privacy]                              # per-repo guard/audit exceptions (diff-visible)
 # allow_paths = ["docs/media/*"]         # skip R3–R7 for these paths (never R1/R2)
 # allow_literals = ["owner-cloud-uid"]   # names from privacy.local.toml [[literal]].name — never values

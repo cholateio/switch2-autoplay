@@ -46,6 +46,8 @@ The installer refuses to run under the default execution policy; `-ExecutionPoli
 |---------|---------|
 | `uv run pytest` | Pure-logic test suite (WSL) |
 | `uv run ruff check .` | Lint |
+| `kit verify` | The fast checks declared in `kit.toml [verify.fast]`: lint, format check, the firmware host tests, and the test suite without `test_pad_selftest.py` and two sequence-number tests that sleep on real timers (about 25 s) |
+| `kit verify --all` | The fast checks, then `[verify.slow]`: the tests the fast lane leaves out, the whole suite under Windows-native Python, and a firmware build in `firmware/build-verify/` whose `sdkconfig` is regenerated from `sdkconfig.defaults` on every run (about 100 s) |
 | `scripts/win pytest …` | Tests under Windows-native Python |
 | `scripts/win ap …` | The `ap` CLI under Windows-native Python |
 | `scripts/win ap probe` | List capture devices and measure size, format and frame rate |
@@ -220,4 +222,5 @@ Run on the owner's Switch 2 with the owner present; pad in the dock, capture car
 | `docs/specs/` | Requirement specs |
 | `docs/research/` | Research notes the specs cite |
 | `docs/protocol.md` | The PC-to-ESP32 serial protocol; the firmware and the Python codec both follow it |
+| `docs/verify.md` | What a person checks by hand after `kit verify --all` is green |
 | `docs/DEVELOPMENT.md` | This file |
