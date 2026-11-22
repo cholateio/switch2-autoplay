@@ -123,7 +123,7 @@ def _roi_of(path: Path, entry: dict) -> ROI | None:
         ) from exc
 
 
-def load_states_file(path: Path) -> StateRegistry:
+def load_states_file(path: Path, *, overlays: bool = False) -> StateRegistry:
     """Build a registry from a states file:
 
         states:
@@ -131,12 +131,16 @@ def load_states_file(path: Path) -> StateRegistry:
              roi: [x, y, w, h], threshold: 0.8}
           - {name, kind: black, roi: [x, y, w, h]}
 
-    `roi` (base coordinates) and `threshold` are optional. Raises
+    `roi` (base coordinates) and `threshold` are optional. An entry with
+    `overlay: true` is something shown on top of a state, not a state: it is
+    left out, and with `overlays=True` only those are returned. Raises
     StatesFileError naming the file, and the template path when that is what
     cannot be read."""
     path = Path(path)
     registry = StateRegistry()
     for entry in read_states_entries(path):
+        if bool(entry.get("overlay", False)) != overlays:
+            continue
         name, kind = entry["name"], entry.get("kind")
         roi = _roi_of(path, entry)
         try:

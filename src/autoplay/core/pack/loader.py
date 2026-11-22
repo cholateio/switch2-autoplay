@@ -1,9 +1,10 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 import yaml
 
 from autoplay.core.controller.base import BUTTON_NAMES
+from autoplay.core.pack.routines import Routine, RoutineError, load_routines
 from autoplay.core.perception.states import (
     StateRegistry,
     StatesFileError,
@@ -15,6 +16,7 @@ MANIFEST = "manifest.yaml"
 # In `forbidden`, the buttons refused in every context.
 EVERYWHERE = "*"
 _KEYS = {"name", "home_context", "guide", "states_file", "forbidden"}
+_OPTIONAL = {"forbidden", "confirm", "routines", "on_stop"}
 
 
 class PackError(ValueError):
@@ -26,7 +28,10 @@ class GamePack:
     """Everything the core knows about one game.
 
     `forbidden` maps each context that has an entry to the buttons refused
-    there, the ones refused everywhere included; ask `forbidden_in`."""
+    there, the ones refused everywhere included; ask `forbidden_in`.
+    `confirm` maps a context or an overlay to the buttons that are sent there
+    only with a stated confirmation. `on_stop` names the routine run once when
+    a run ends."""
 
     name: str
     root: Path
@@ -37,6 +42,10 @@ class GamePack:
     forbidden: dict[str, frozenset[str]]
     home_context: str
     forbidden_everywhere: frozenset[str] = frozenset()
+    overlays: StateRegistry = field(default_factory=StateRegistry)
+    confirm: dict[str, frozenset[str]] = field(default_factory=dict)
+    routines: dict[str, Routine] = field(default_factory=dict)
+    on_stop: str | None = None
 
     def forbidden_in(self, context: str | None) -> frozenset[str]:
         """The buttons refused in `context`. None is a picture no context was
@@ -83,7 +92,7 @@ def _buttons(source: Path, context: str, raw: object) -> frozenset[str]:
     return frozenset(raw)
 
 
-def _load_states(root: Path, path: Path) -> StateRegistry:
+def _load_states(root: Path, path: Path) -> tuple[StateRegistry, StateRegistry]:
     try:
         for entry in read_states_entries(path):
             template = entry.get("template")
@@ -102,7 +111,7 @@ def _load_states(root: Path, path: Path) -> StateRegistry:
                     "screenshots and never committed). Rebuild them with "
                     "`ap template`, see docs/DEVELOPMENT.md."
                 )
-        return load_states_file(path)
+        return load_states_file(path), load_states_file(path, overlays=True)
     except StatesFileError as exc:
         raise PackError(str(exc)) from exc
 
@@ -120,6 +129,10 @@ def load_pack(path: Path) -> GamePack:
         forbidden:
           "*": [BUTTON, ...]              # refused everywhere
           <context>: [BUTTON, ...]
+        confirm:                          # optional
+          <context or overlay>: [BUTTON, ...]
+        routines: <file>                  # optional, Python, see routines.py
+        on_stop: <routine name>           # optional, takes no arguments
 
     Paths are relative to the pack directory and must stay inside it; template
     paths are relative to the states file. Raises PackError saying what is
@@ -132,8 +145,8 @@ def load_pack(path: Path) -> GamePack:
         raise PackError(f"cannot read {source}: {exc}") from exc
     if not isinstance(data, dict):
         raise PackError(f"{source}: expected a mapping")
-    unknown = sorted(str(k) for k in data.keys() - _KEYS)
-    missing = sorted(_KEYS - {"forbidden"} - data.keys())
+    unknown = sorted(str(k) for k in data.keys() - _KEYS - _OPTIONAL)
+    missing = sorted(_KEYS - _OPTIONAL - data.keys())
     if unknown or missing:
         raise PackError(f"{source}: missing keys {missing}, unknown keys {unknown}")
     name, home = data["name"], data["home_context"]
@@ -172,7 +185,9 @@ def load_pack(path: Path) -> GamePack:
         chapters[chapter] = chapter_path
         summaries[chapter] = entry["summary"]
 
-    states = _load_states(root, _inside(root, data["states_file"], "states_file"))
+    states, overlays = _load_states(
+        root, _inside(root, data["states_file"], "states_file")
+    )
     contexts = states.names
     if home not in contexts:
         raise PackError(
@@ -192,7 +207,38 @@ def load_pack(path: Path) -> GamePack:
                 f"state; the states are {contexts}"
             )
         forbidden[context] = _buttons(source, context, raw) | everywhere
+    raw_confirm = data.get("confirm") or {}
+    if not isinstance(raw_confirm, dict):
+        raise PackError(f"{source}: confirm must map contexts or overlays to buttons")
+    confirm: dict[str, frozenset[str]] = {}
+    for where, raw in raw_confirm.items():
+        if where not in contexts and where not in overlays.names:
+            raise PackError(
+                f"{source}: confirm names {where!r}, which is neither a state nor "
+                f"an overlay; states {contexts}, overlays {overlays.names}"
+            )
+        confirm[where] = _buttons(source, where, raw)
+
+    routines: dict[str, Routine] = {}
+    if data.get("routines") is not None:
+        routines_path = _inside(root, data["routines"], "routines")
+        if not routines_path.is_file():
+            raise PackError(f"{source}: routines file {routines_path} is missing")
+        try:
+            routines = load_routines(routines_path)
+        except RoutineError as exc:
+            raise PackError(str(exc)) from exc
+    on_stop = data.get("on_stop")
+    if on_stop is not None and (on_stop not in routines or routines[on_stop].params):
+        raise PackError(
+            f"{source}: on_stop must name a routine without arguments; the "
+            f"routines are {sorted(routines)}"
+        )
     return GamePack(
+        overlays=overlays,
+        confirm=confirm,
+        routines=routines,
+        on_stop=on_stop,
         name=name,
         root=root,
         states=states,

@@ -23,6 +23,19 @@ class ForbiddenInput(RuntimeError):
         self.context = context
 
 
+class NeedsConfirmation(ForbiddenInput):
+    """A button was refused because the pack wants it confirmed here."""
+
+    def __init__(self, button: str, where: str) -> None:
+        RuntimeError.__init__(
+            self,
+            f"button {button} needs a confirmation while {where!r} is on screen: "
+            "send it again with `confirm` set to the option you read and mean",
+        )
+        self.button = button
+        self.context = where
+
+
 class InputGuard:
     """The only way a run reaches the gamepad: every input is checked against
     the buttons the pack forbids in the context on screen, and logged.
@@ -48,11 +61,13 @@ class InputGuard:
         self._source = source
         self._pad = pad
         self._log = log
+        self._overlays: frozenset[str] = frozenset()
 
     def _observe(self) -> tuple[str | None, int]:
         latest = self._source.latest()
         seq = latest.seq if latest is not None else 0
         seen: list[str | None] = []
+        overlays: set[str] = set()
         for _ in range(2):
             frame = self._source.wait_next(seq, FRAME_TIMEOUT_S)
             if frame is None:
@@ -62,6 +77,9 @@ class InputGuard:
             seq = frame.seq
             names = self._pack.states.matches(frame.bgr)
             seen.append(names[0] if len(names) == 1 else None)
+            # Shown in either frame counts: asking once too often is the safe side.
+            overlays.update(self._pack.overlays.matches(frame.bgr))
+        self._overlays = frozenset(overlays)
         return (seen[0] if seen[0] == seen[1] else None), seq
 
     def _observe_after(self, ms: int) -> str | None:
@@ -83,9 +101,20 @@ class InputGuard:
         if self._log is not None:
             self._log.event("input", outcome=outcome, **fields)
 
-    def press(self, button: str, ms: int | None = None) -> str | None:
+    def _confirm_where(self, button: str, context: str | None) -> str | None:
+        """The context or overlay on screen that wants `button` confirmed."""
+        for where in (context, *sorted(self._overlays)):
+            if where is not None and button in self._pack.confirm.get(where, ()):
+                return where
+        return None
+
+    def press(
+        self, button: str, ms: int | None = None, confirm: str | None = None
+    ) -> str | None:
         """Press `button` unless the context forbids it, and return the context
-        it was pressed in. Raises ForbiddenInput, with nothing sent to the
+        it was pressed in. Where the pack wants the button confirmed it is sent
+        only with a non-empty `confirm`, which is logged; otherwise
+        NeedsConfirmation is raised and nothing is sent. Raises ForbiddenInput, with nothing sent to the
         gamepad, for a forbidden button; UnknownButton for a name that does not
         exist; CaptureError when the context cannot be read. Whatever the
         gamepad raises propagates."""
@@ -98,6 +127,12 @@ class InputGuard:
         if button in self._pack.forbidden_in(context):
             self._event(REFUSED, **fields)
             raise ForbiddenInput(button, context)
+        where = self._confirm_where(button, context)
+        if where is not None:
+            if not confirm:
+                self._event(REFUSED, needs_confirm=where, **fields)
+                raise NeedsConfirmation(button, where)
+            fields = {**fields, "confirm": confirm, "confirm_where": where}
         self._send(lambda: self._pad.press(button, ms), fields)
         return context
 
@@ -189,8 +224,16 @@ class InputGuard:
         return context
 
     def _first_forbidden(self, names: list[str], context: str | None) -> str | None:
+        # A combo carries no confirmation, so it never sends a button that needs one.
         forbidden = self._pack.forbidden_in(context)
-        return next((name for name in names if name in forbidden), None)
+        return next(
+            (
+                name
+                for name in names
+                if name in forbidden or self._confirm_where(name, context)
+            ),
+            None,
+        )
 
     def _send(self, action, fields: dict) -> None:
         try:
