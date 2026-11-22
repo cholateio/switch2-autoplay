@@ -22,3 +22,14 @@ def test_module_entry_point_returns_main_exit_code():
     )
     assert result.returncode == 0
     assert result.stdout.startswith("ap ")
+
+
+def test_text_the_console_cannot_encode_does_not_crash(monkeypatch):
+    import io
+
+    raw = io.BytesIO()
+    monkeypatch.setattr(sys, "stdout", io.TextIOWrapper(raw, encoding="cp950"))
+    assert main(["--version"]) == 0
+    print("caf\u00e9")
+    sys.stdout.flush()
+    assert b"caf\\xe9" in raw.getvalue()

@@ -40,8 +40,17 @@ def _build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _tolerant_output() -> None:
+    # A Windows console uses a legacy code page (cp950 here); text it cannot
+    # encode, such as a model's summary, must not crash the command.
+    for stream in (sys.stdout, sys.stderr):
+        if hasattr(stream, "reconfigure"):
+            stream.reconfigure(errors="backslashreplace")
+
+
 def main(argv: list[str] | None = None) -> int:
     """Run the `ap` CLI and return its exit code; argparse exits become return codes."""
+    _tolerant_output()
     parser = _build_parser()
     try:
         args = parser.parse_args(argv)
