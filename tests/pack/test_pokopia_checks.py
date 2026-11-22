@@ -152,6 +152,8 @@ def test_the_routines_file_loads_and_names_what_the_guide_names():
         "face_away",
         "bag_goto",
         "place_line",
+        "place_wall",
+        "break_wall",
         "magnet_on",
         "magnet_off",
         "ground",

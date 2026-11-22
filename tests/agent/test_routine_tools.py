@@ -277,3 +277,27 @@ def test_each_call_is_sent_with_the_reply_length_the_budget_reserved(tmp_path):
     )
     run_agent(session, "goal", model)
     assert model.limits == [3000, 2400, 2400]
+
+
+def test_after_a_failed_call_the_rest_of_the_turn_is_not_run(tmp_path):
+    session = session_with(tmp_path)
+    turn = [("press", {"button": "MINUS"}), ("press", {"button": "X"}), ("look", {})]
+    model = FakeModel([turn, [("finish", {"summary": "ok"})]])
+    assert run_agent(session, "goal", model).reason == "done"
+    first, second, third = model.results(2)
+    assert first["is_error"] and "Refused" in first["content"][0]["text"]
+    assert second["is_error"] and "Not run" in second["content"][0]["text"]
+    # Looking is harmless and still happens.
+    assert not third.get("is_error") and payload(third) == {"context": "explore"}
+    assert [(e["button"], e["outcome"]) for e in events(session, "input")] == [
+        ("MINUS", "refused")
+    ]
+
+
+def test_calls_of_one_turn_all_run_when_none_fails(tmp_path):
+    session = session_with(tmp_path)
+    turn = [("press", {"button": "X"}), ("press", {"button": "B"}), ("look", {})]
+    model = FakeModel([turn, [("finish", {"summary": "ok"})]])
+    run_agent(session, "goal", model)
+    assert not any(result.get("is_error") for result in model.results(2))
+    assert [e["button"] for e in events(session, "input")] == ["X", "B"]

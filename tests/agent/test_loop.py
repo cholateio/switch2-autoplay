@@ -403,6 +403,10 @@ def test_combo_tool_sends_and_refuses_like_press(tmp_path):
                 ("combo", {"hold": "ZL", "button": "A", "ms": 100}),
                 ("combo", {"hold": "ZL", "button": "PLUS", "ms": 100}),
                 ("combo", {"hold": "ZL", "ms": 100}),
+            ],
+            # Its own turn since 2026-11-23: after a failed call, the later
+            # calls of the same turn no longer touch the game.
+            [
                 (
                     "combo",
                     {"hold": "L", "stick": {"which": "L", "x": 1, "y": 0}, "ms": 100},
@@ -412,7 +416,8 @@ def test_combo_tool_sends_and_refuses_like_press(tmp_path):
         ]
     )
     assert run_agent(session, "goal", model).reason == "done"
-    sent, refused, malformed, stick = model.results(2)
+    sent, refused, malformed = model.results(2)
+    (stick,) = model.results(3)
     assert payload(sent)["held"] == "ZL" and payload(sent)["then"] == "A"
     assert refused["is_error"] is True and "PLUS" in refused["content"][0]["text"]
     assert malformed["is_error"] is True

@@ -145,6 +145,11 @@ def _in_hand(hands, frame) -> str | None:
 )
 def place_line(hands, direction, count):
     _pitch(hands, PITCH["mid"])
+    placed = _line(hands, direction, count)
+    return f"placed {placed} going {direction}; now in front of the last one"
+
+
+def _line(hands, direction: str, count: int) -> int:
     dx = 1.0 if direction == "e" else -1.0
     placed = 0
     for block in range(1, count + 1):
@@ -176,11 +181,43 @@ def place_line(hands, direction, count):
         else:
             raise RoutineStopped(
                 f"no block appeared after two presses (picture change {change:.3f}); "
-                f"{placed} placed. The cell may be out of reach at this height",
+                f"{placed} placed in this line. The cell may be out of reach at this height",
                 step=f"block {block}",
             )
         placed += 1
-    return f"placed {placed} going {direction}; now in front of the last one"
+    return placed
+
+
+@routine(
+    "Build a wall `width` wide and `layers` high in front of you, going east "
+    "(screen right) for the first layer and back for the next, and so on. Same "
+    "needs as place_line. Layers 1 and 2 work in human form and right after "
+    "magnet_on; layers 3 and 4 need Magnet Rise and are placed after rising a "
+    "step each (do not call `ground` between magnet_on and this). Ends in front "
+    "of the west end for an even number of layers, the east end for an odd one.",
+    width=Param(int, 1, 6),
+    layers=Param(int, 1, 4),
+)
+def place_wall(hands, width, layers):
+    if layers > 2 and hands.context() != "placing":
+        raise RoutineStopped(
+            "more than 2 layers needs Magnet Rise: magnet_on, take the block, call again",
+            step="start",
+        )
+    _pitch(hands, PITCH["mid"])
+    done = 0
+    for layer in range(1, layers + 1):
+        if layer > 2:
+            hands.press("B", RISE_MS)
+            hands.wait(500)
+        try:
+            done += _line(hands, "e" if layer % 2 else "w", width)
+        except RoutineStopped as stop:
+            raise RoutineStopped(
+                f"{stop}; {done} placed in the layers before",
+                step=f"layer {layer}, {stop.step}",
+            ) from None
+    return f"wall {width} wide, {layers} high: {done} blocks placed"
 
 
 @routine(
@@ -380,6 +417,35 @@ def break_column(hands, count):
     finally:
         hands.stick("R", -1.0, 0.0, YAW_MS)
     return f"broke {count}, top down"
+
+
+@routine(
+    "Magnet Rise, nothing in hand: take down a wall `width` wide and `layers` "
+    "high. Start in front of its west (screen left) end, facing it; it goes "
+    "column by column to the east with break_column and ends in front of the "
+    "east end. If it stops, it says how many columns were finished.",
+    width=Param(int, 1, 6),
+    layers=Param(int, 1, 4),
+)
+def break_wall(hands, width, layers):
+    for column in range(1, width + 1):
+        if column > 1:
+            hands.combo("ZL", STEP_MS, stick=("L", 1.0, 0.0))
+            hands.wait(500)
+        for _ in range(4):
+            hands.press("L", RISE_MS)
+        for _ in range(layers + 1):
+            hands.press("B", RISE_MS)
+            hands.wait(200)
+        hands.wait(300)
+        try:
+            break_column(hands, layers)
+        except RoutineStopped as stop:
+            raise RoutineStopped(
+                f"{stop}; {column - 1} columns finished",
+                step=f"column {column}, {stop.step}",
+            ) from None
+    return f"wall taken down: {width * layers} blocks"
 
 
 @routine(

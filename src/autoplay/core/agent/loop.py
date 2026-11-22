@@ -105,6 +105,9 @@ could lose progress or items.
 - Tools described as "Routine of this game" are fixed sequences that check the \
 picture at each step. Prefer one over doing the same thing input by input; when \
 one stops, look, fix what it reports, and go on from there.
+- Every model turn costs time and money. Put several tool calls in one turn \
+whenever the later ones do not depend on seeing the result of the earlier ones; \
+they run in order, and after one fails no later call of that turn touches the game.
 - Some buttons are refused in some contexts, and in a picture that is not \
 recognised. A refused input was not sent. That is a safety rule of this setup: \
 do not look for another way to reach the same effect.
@@ -151,6 +154,10 @@ def _result_block(call: ToolCall, output: ToolOutput) -> dict:
 
 
 DROPPED = "[screenshot dropped]"
+# Tools that do not touch the game: they run even after a failed call.
+PASSIVE = frozenset(
+    {"look", "read_guide", "notes_write", "lesson_add", "lesson_read", "lesson_used"}
+)
 
 
 def trim_pictures(messages: list[dict], keep: int) -> int:
@@ -214,10 +221,23 @@ def _converse(
             # max_tokens, a full context window, a pause: the turn is not whole.
             return ERROR, f"the model's turn ended early ({reply.stop_reason})"
         results = []
+        failed: str | None = None
         for call in reply.tool_calls:
             _check_stop(session)
             tool = tools.get(call.name)
-            if tool is None:
+            if failed is not None and call.name not in PASSIVE:
+                # The later calls of a turn were written expecting the earlier
+                # ones to work; acting on the game after a failure would be blind.
+                output = ToolOutput(
+                    [
+                        {
+                            "type": "text",
+                            "text": f"Not run: `{failed}`, earlier in this turn, failed.",
+                        }
+                    ],
+                    True,
+                )
+            elif tool is None:
                 output = ToolOutput(
                     [{"type": "text", "text": f"there is no tool {call.name!r}"}], True
                 )
@@ -232,6 +252,8 @@ def _converse(
             )
             if call.name == FINISH and not output.is_error:
                 return DONE, call.input["summary"]
+            if output.is_error and failed is None:
+                failed = call.name
             results.append(_result_block(call, output))
         messages.append({"role": "user", "content": results})
 
