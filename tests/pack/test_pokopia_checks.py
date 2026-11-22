@@ -196,6 +196,11 @@ def test_a_cell_picture_tells_the_same_item_from_another_and_from_an_empty_cell(
     grass = with_item()
     icon = checks.cell_icon(grass, (1, 4))
     assert checks.same_icon(icon, checks.cell_icon(with_item(), (1, 4)))
+    # Same shape in a slightly different green: correlation would call it the
+    # same item, the pixel difference does not.
+    alike = bag(4, (1, 4))
+    cv2.line(alike, (x - 20, y - 12), (x + 20, y - 12), (60, 200, 110), 6)
+    assert not checks.same_icon(icon, checks.cell_icon(alike, (1, 4)))
     other = grass.copy()
     cv2.circle(other, (x, y), 22, (40, 40, 200), -1)
     assert not checks.same_icon(icon, checks.cell_icon(other, (1, 4)))

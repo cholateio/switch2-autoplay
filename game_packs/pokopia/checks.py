@@ -163,10 +163,14 @@ def cell_icon(bgr: np.ndarray, cell: tuple[int, int]) -> np.ndarray:
 
 
 def same_icon(a: np.ndarray, b: np.ndarray) -> bool:
-    """Whether two cell pictures show the same item."""
+    """Whether two cell pictures show the same item. The bag is a still
+    picture, so the same item in the same cell differs by 0.07 to 0.13 grey
+    levels on average; the most alike other block on the page, another grass
+    block, by 2.8. Correlation alone is not enough: it scored two different
+    blocks 0.907."""
     if a.shape != b.shape or a.std() < 1 or b.std() < 1:
         return False
-    return float(cv2.matchTemplate(a, b, cv2.TM_CCOEFF_NORMED).max()) >= 0.9
+    return float(np.abs(a.astype(np.int16) - b).mean()) < 1.0
 
 
 def bag_page(bgr: np.ndarray) -> int | None:
