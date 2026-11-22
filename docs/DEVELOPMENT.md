@@ -198,6 +198,30 @@ Run on the owner's Switch 2 with the owner present; pad in the dock, capture car
 - **Press to picture is about 100 ms on the HOME menu.** That covers the serial command (about 12 ms until the console takes the report), the console drawing the change, HDMI, and the capture card (at most about 64 ms, from the M0 frame-age check). The samples fall into two groups one console frame (16.7 ms) apart: 19 at 99–100 ms and 11 at 116–117 ms. A game may take longer to react than the HOME menu; measure it there before tuning waits.
 - **The templates were placed using the same screenshots `ap classify` checks**, so the 16/16 is not a held-out result; the three frames in `fixtures/m2/heldout/` are.
 
+## M3 acceptance (2026-11-22)
+
+Run on the owner's Switch 2 with the owner present; pad in the dock, capture card on device 0, model `claude-opus-5-5`.
+
+| Check | Result |
+|---|---|
+| `ap classify` on the Pokopia screenshots the templates were placed with (`fixtures/pokopia/screens/`) | 101/101 |
+| `ap classify` on every third screenshot, set aside before the templates were cut (`fixtures/pokopia/heldout/`) | 46/46 after one fix: the `placing` template was recut and its threshold raised to 0.97 because of one held-out picture |
+| All 373 captured frames through `StateRegistry.matches` | none matched more than one context |
+| `ap play`, goal "open the bag, then close it", 10 runs | 10/10 `reason=done`; each log shows a press in `bag` and ends in `explore`; 5 model calls, about US$0.06 and 16 s per run |
+| `ap play`, goal "open the main menu, then close it", 10 runs | 10/10, same checks; about US$0.07 per run |
+| `ap play`, goal "talk to the following Pokémon and end the talk" | done: stick, A, A, down, down, A; 9 model calls, US$0.11 |
+| `--max-usd 0.24` on a long goal | stopped after 3 model calls with `reason=budget`, exit code 4, picture in `explore` |
+| F12 during a walking goal | `reason=estop`, exit code 3 |
+| Audit of all 25 runs | PLUS sent only in `explore`; MINUS, HOME and CAPTURE never sent; nothing refused |
+
+The 25 runs made 127 model calls and cost US$1.79.
+
+- **`dialog_choice` is not a context.** The choice box moves with the number of choices, so a dialogue with choices reports `dialog` and the model reads the choices from the picture.
+- **`placing` means "transformed for Magnet Rise"**: the move label without the two arrows beside it. The same label with arrows is `explore` with that move selected, and scores 0.94 against the template; hence the 0.97 threshold.
+- **The first run's presses never reached the console.** The pad had just been plugged back into the dock; one press by hand fixed it (see "Easy to forget"). The model noticed, stopped and said so.
+- **The budget stops early.** Each call reserves a full-length reply (`max_tokens` 8000, about US$0.18), so a run ends when the money left falls below that: with `--max-usd 0.5` after about US$0.3. `--max-usd 0.05` stops before the first call.
+- **`ap capture` did not react to its keys** on the owner's machine (digits, `s`); the cause is not known. The screenshots were taken by a timer script instead.
+
 ## Easy to forget
 
 - **The pad becomes player 1.** While it is plugged into the dock, a single-player game listens to it and ignores the Joy-Con. To play by hand, unplug the OTG cable from the dock.
