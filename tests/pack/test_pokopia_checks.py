@@ -183,3 +183,21 @@ def test_the_count_beside_a_cell_tells_same_from_changed_without_reading_it():
     assert ninety_nine.any()
     assert checks.same_count(ninety_nine, again)
     assert not checks.same_count(ninety_nine, ninety_eight)
+
+
+def test_a_cell_picture_tells_the_same_item_from_another_and_from_an_empty_cell():
+    x, y = checks.BAG_COLUMNS[3], checks.BAG_ROWS[0]
+
+    def with_item() -> np.ndarray:
+        frame = bag(4, (1, 4))
+        cv2.line(frame, (x - 20, y - 12), (x + 20, y - 12), (60, 220, 90), 6)
+        return frame
+
+    grass = with_item()
+    icon = checks.cell_icon(grass, (1, 4))
+    assert checks.same_icon(icon, checks.cell_icon(with_item(), (1, 4)))
+    other = grass.copy()
+    cv2.circle(other, (x, y), 22, (40, 40, 200), -1)
+    assert not checks.same_icon(icon, checks.cell_icon(other, (1, 4)))
+    empty = np.full((1080, 1920, 3), 235, np.uint8)
+    assert not checks.same_icon(icon, checks.cell_icon(empty, (1, 4)))

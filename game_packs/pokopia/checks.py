@@ -155,6 +155,20 @@ def same_count(a: np.ndarray, b: np.ndarray) -> bool:
     return int((a != b).sum()) < 4
 
 
+def cell_icon(bgr: np.ndarray, cell: tuple[int, int]) -> np.ndarray:
+    """The middle of the item picture in the bag cell (row, column)."""
+    row, column = cell
+    x, y = BAG_COLUMNS[column - 1], BAG_ROWS[row - 1]
+    return bgr[y - 28 : y + 28, x - 28 : x + 28].copy()
+
+
+def same_icon(a: np.ndarray, b: np.ndarray) -> bool:
+    """Whether two cell pictures show the same item."""
+    if a.shape != b.shape or a.std() < 1 or b.std() < 1:
+        return False
+    return float(cv2.matchTemplate(a, b, cv2.TM_CCOEFF_NORMED).max()) >= 0.9
+
+
 def bag_page(bgr: np.ndarray) -> int | None:
     """The page the bag shows, 1 to 4: the dot drawn as an orange ring."""
     hsv = cv2.cvtColor(bgr, cv2.COLOR_BGR2HSV)

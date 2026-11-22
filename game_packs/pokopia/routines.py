@@ -22,9 +22,6 @@ TURN_MS = 60
 RISE_MS = 300
 # Scores of the white lettering: the same prompt 0.99 to 1.0, another one at most 0.67.
 SEEN = 0.85
-# Share of changed pixels in front of the character: placed 0.047 to 0.36,
-# a press that placed nothing or just waiting at most 0.028.
-PLACED = 0.04
 STANDING = 130
 CONFIRM_ROI = (380, 880, 760, 120)
 NOTE_PP_ROI = (700, 440, 540, 240)
@@ -162,9 +159,8 @@ def _in_hand(hands, frame) -> str | None:
     "the next, and so on. direction e is screen right, w screen left. Needs an "
     "item in hand, the character facing away from the camera, quantity 1, and "
     "the camera square to the grid (a row of blocks looks level on screen). Sets "
-    "the mid view. Each block is confirmed on the picture; when the picture "
-    "does not show it, the count in the bag decides, and only a press that "
-    "placed nothing is repeated, once. "
+    "the mid view. After every press it opens the bag to see whether the "
+    "item's count went down, and repeats a press only when it did not, once. "
     "Called again at the end of a line, in the other direction, it puts the "
     "next layer on top (up to layer 2 from the ground; rise first for more).",
     direction=Param(str, choices=("e", "w")),
@@ -176,20 +172,62 @@ def place_line(hands, direction, count):
     return f"placed {placed} going {direction}; now in front of the last one"
 
 
-def _count_mark(hands):
-    """With an item in hand: open the bag (its cursor is on that item), take
-    the picture of its count, and take the item again."""
+class _InHand:
+    """Where the item in hand sits in the bag, what it looks like there, and
+    the picture of its count as last seen."""
+
+    def __init__(self, page, cell, icon, mark) -> None:
+        self.page, self.cell, self.icon, self.mark = page, cell, icon, mark
+
+
+def _bag_cell(hands, step: str):
     _open_bag(hands)
     frame = hands.frame()
-    cell = checks.bag_cursor(frame)
-    if cell is None:
-        raise RoutineStopped("cannot find the bag cursor", step="check the count")
-    mark = checks.count_mark(frame, cell)
+    page, cell = checks.bag_page(frame), checks.bag_cursor(frame)
+    if page is None or cell is None:
+        raise RoutineStopped("cannot read the bag page or cursor", step=step)
+    return frame, page, cell
+
+
+def _start_count(hands) -> _InHand:
+    """With an item in hand: open the bag (its cursor is on that item),
+    remember the cell, the item's picture and its count, and take it again."""
+    if _in_hand(hands, hands.frame()) is None:
+        raise RoutineStopped("nothing is in hand", step="start")
+    frame, page, cell = _bag_cell(hands, "start")
+    item = _InHand(
+        page, cell, checks.cell_icon(frame, cell), checks.count_mark(frame, cell)
+    )
+    _retake(hands, "start")
+    return item
+
+
+def _retake(hands, step: str) -> None:
     hands.press("A")
     hands.wait(1000)
     if hands.context() == "bag":
-        raise RoutineStopped("the item was not taken out again", step="check the count")
-    return mark
+        raise RoutineStopped("the item was not taken out again", step=step)
+
+
+def _count_changed(hands, item: _InHand, step: str) -> bool:
+    """Open the bag and say whether the item's count differs from the last
+    look; then take the item again. A is pressed in the bag only on the same
+    cell showing the same item: with the stack used up, the cursor could be
+    on something else."""
+    frame, page, cell = _bag_cell(hands, step)
+    if (page, cell) != (item.page, item.cell) or not checks.same_icon(
+        checks.cell_icon(frame, cell), item.icon
+    ):
+        raise RoutineStopped(
+            "the item is no longer in its bag cell (the stack may be used up); "
+            "the bag is left open, nothing was taken",
+            step=step,
+        )
+    mark = checks.count_mark(frame, cell)
+    changed = not checks.same_count(mark, item.mark)
+    item.mark = mark
+    _retake(hands, step)
+    return changed
 
 
 def _still(hands):
@@ -206,9 +244,11 @@ def _still(hands):
     return last
 
 
-def _line(hands, direction: str, count: int, count_seen: list) -> int:
-    """`count_seen` holds the picture of the item's count in the bag as last
-    seen; it settles what the picture in front of the character leaves open."""
+def _line(hands, direction: str, count: int, item: _InHand) -> int:
+    """Place `count` blocks. Whether a press placed one is decided by the
+    item's count in the bag, looked at after every press: the picture in front
+    of the character misses blocks when the character is off the middle of the
+    screen (it read 0.005 to 0.028 for blocks that were placed)."""
     dx = 1.0 if direction == "e" else -1.0
     placed = 0
     for block in range(1, count + 1):
@@ -228,20 +268,7 @@ def _line(hands, direction: str, count: int, count_seen: list) -> int:
             hands.press("A")
             hands.wait(1300)
             change = checks.changed_fraction(before, hands.frame())
-            if change < PLACED:
-                # A block that lands late: look once more before deciding.
-                hands.wait(700)
-                change = checks.changed_fraction(before, hands.frame())
-            seen = change >= PLACED
-            counted = None
-            if not seen:
-                # The picture misses a block when the character is not in the
-                # middle of the screen (0.012 to 0.028 for blocks that were
-                # placed). The count in the bag decides; only if it did not
-                # change is a second press safe.
-                mark = _count_mark(hands)
-                counted = not checks.same_count(mark, count_seen[0])
-                count_seen[0] = mark
+            counted = _count_changed(hands, item, f"block {block}")
             hands.log(
                 routine="place_line",
                 block=block,
@@ -249,8 +276,9 @@ def _line(hands, direction: str, count: int, count_seen: list) -> int:
                 change=round(change, 3),
                 counted=counted,
             )
-            if seen or counted:
+            if counted:
                 break
+            # The count did not move: nothing was placed, a second press is safe.
         else:
             raise RoutineStopped(
                 f"two presses placed nothing (the count in the bag did not change); "
@@ -259,12 +287,6 @@ def _line(hands, direction: str, count: int, count_seen: list) -> int:
             )
         placed += 1
     return placed
-
-
-def _start_count(hands) -> list:
-    if _in_hand(hands, hands.frame()) is None:
-        raise RoutineStopped("nothing is in hand", step="start")
-    return [_count_mark(hands)]
 
 
 @routine(
@@ -284,14 +306,14 @@ def place_wall(hands, width, layers):
             step="start",
         )
     _pitch(hands, PITCH["mid"])
-    count_seen = _start_count(hands)
+    item = _start_count(hands)
     done = 0
     for layer in range(1, layers + 1):
         if layer > 2:
             hands.press("B", RISE_MS)
             hands.wait(500)
         try:
-            done += _line(hands, "e" if layer % 2 else "w", width, count_seen)
+            done += _line(hands, "e" if layer % 2 else "w", width, item)
         except RoutineStopped as stop:
             raise RoutineStopped(
                 f"{stop}; {done} placed in the layers before",
@@ -446,17 +468,26 @@ def _break(hands, step: str) -> None:
         hands.wait(200)
     else:
         raise RoutineStopped("the note of the last pick-up does not go away", step=step)
-    ok, why = _gate(hands)
-    hands.log(routine="break", step=step, gate=ok, why=why)
-    if not ok:
-        raise RoutineStopped(f"Y not pressed: {why}", step=step)
-    _press_if(
-        hands,
-        "Y",
-        lambda frame: _gate(hands, frame)[0],
-        step,
-        "the outline or the prompt was gone when it was about to be sent",
-    )
+    for attempt in (1, 2):
+        ok, why = _gate(hands)
+        hands.log(routine="break", step=step, gate=ok, why=why)
+        if not ok:
+            raise RoutineStopped(f"Y not pressed: {why}", step=step)
+        try:
+            _press_if(
+                hands,
+                "Y",
+                lambda frame: _gate(hands, frame)[0],
+                step,
+                "the outline or the prompt was gone when it was about to be sent",
+            )
+            break
+        except RoutineStopped:
+            # Nothing was sent. A flicker (a puff of smoke, the follower
+            # passing) can hide the outline for a frame: judge once more.
+            if attempt == 2:
+                raise
+            hands.wait(500)
     for _ in range(23):
         hands.wait(150)
         if _note(hands):
