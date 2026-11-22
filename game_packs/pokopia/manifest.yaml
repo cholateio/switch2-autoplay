@@ -8,7 +8,7 @@ guide:
     - {name: dialog, file: guide/dialog.md, summary: "和寶可夢對話、選項、怎麼結束"}
     - {name: moves, file: guide/moves.md, summary: "招式的選擇、用途與 PP"}
     - {name: placement, file: guide/placement.md, summary: "擺放家具與方塊（尚未驗證）"}
-    - {name: camera, file: guide/camera.md, summary: "鏡頭控制與誤入拍照模式時怎麼離開"}
+    - {name: camera, file: guide/camera.md, summary: "施工視角的固定做法、鏡頭數值、拍照模式怎麼離開；擺放或破壞前必讀"}
 states_file: states.yaml
 forbidden:
   "*": [HOME, CAPTURE]
