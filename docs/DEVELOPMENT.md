@@ -139,7 +139,8 @@ A game pack is a directory (`game_packs/<name>/`) with everything the core knows
 | `manifest.yaml` | Name, home context, guide files, states file, and the buttons each context forbids (`"*"` = everywhere) |
 | `guide/core.md` | Sent with every model call; kept short |
 | `guide/<chapter>.md` | Read by the model on demand (`read_guide`) |
-| `states.yaml` | One state per context, in the `ap template` format |
+| `states.yaml` | One state per context, in the `ap template` format. An entry with `overlay: true` is not a context but something shown on top of one (Pokopia: the cursor of a choice list) |
+| `routines.py` (optional) | Fixed sequences the model gets as tools; see below |
 | `templates/` | Template images cut from screenshots. **Gitignored**: rebuild them on a new machine |
 | `knowledge/` | Source material the guide was written from |
 
@@ -168,6 +169,12 @@ for button in ('PLUS', 'MINUS', 'HOME', 'CAPTURE'):
 `model_call` events hold the four token counts, the cost in US dollars, the latency and the stop reason; `run_result` holds how the run ended.
 
 **Cost.** Prices per model are in `core/agent/budget.py`, with the date they were checked. Before each model call the prompt is counted with the token-counting endpoint, and the budget reserves that prompt at the dearest input rate plus a full-length reply; it stops the run (`reason=budget`, exit code 4) when that no longer fits. Server-side fallbacks are not used.
+
+**Routines.** A pack may name a Python file under `routines:`. Each function marked `@routine(description, **params)` (`autoplay.core.pack.routines`) becomes a model tool of the same name; it gets a `Hands` object (`core/pack/hands.py`) whose inputs all go through the input guard, and returns the text reported to the model, or raises `RoutineStopped(message, step=...)`. The tool result is that text plus one screenshot. `on_stop:` names a routine without arguments that the loop runs once when a run ends (not after an emergency stop), so that a run stopped by its budget does not leave the game half-way. `confirm: {<context or overlay>: [BUTTON]}` makes a button need a `confirm` text there, which is logged; routines must pass one too. A pack's Python is trusted local code: it is imported from the pack directory named on the command line, nothing else.
+
+The Pokopia routines need more templates than the contexts do (prompts, the pick-up note, the confirmation question); `fixtures/pokopia/cut_templates.py` (local) records where each was cut from. `fixtures/pokopia/rt.py PORT "routine arg=value" ...` runs routines on the console without the model.
+
+**What the loop does to keep a run small.** The conversation keeps the newest `keep_screenshots` (4) pictures; once twice as many have piled up, the older ones are replaced by a line of text. That edits the history, and a thinking block is bound to the conversation it was made in, so every request (counting tokens as well as sending; both were refused before) carries `thinking.block_binding.prefix_mismatch_behavior: "drop_block"` and the beta header `thinking-binding-controls-2026-08-01`: the API leaves out the thinking made before the edit. After a failed tool call, the later calls of the same turn that would touch the game are not run. Each call is sent with the reply length the budget reserved (4 times the longest reply so far, at least 1500 tokens, at most `max_tokens`).
 
 ## M1 acceptance (2026-11-21)
 
@@ -225,11 +232,36 @@ The 25 runs made 127 model calls and cost US$1.79.
 - **The budget stopped early.** `max_tokens` has since been lowered to 3000 (a reserve of about US$0.06 per call). During the acceptance each call reserved a full-length reply (`max_tokens` 8000, about US$0.18), so a run ends when the money left falls below that: with `--max-usd 0.5` after about US$0.3. `--max-usd 0.05` stops before the first call.
 - **`ap capture` did not react to its keys** on the owner's machine (digits, `s`); the cause is not known. The screenshots were taken by a timer script instead.
 
+## M4 acceptance (2026-11-23)
+
+Run by the model on the console, at night in the game, with `ap play` and the Pokopia routines. The field was checked after each run: 草原的草皮 back to 99, nothing left standing.
+
+| Check | Result |
+| --- | --- |
+| A row of 5 blocks placed, each confirmed on the picture, then removed | done in 21 model calls, US$0.685; 5 breaks, each after a passed check |
+| A 3×2 wall built and taken down | done in 7 model calls, US$0.181 (2026-11-22, input by input: 70 calls, US$1.81) |
+| No `Y` without a passed check | 12 `Y` in 6 runs, all inside a routine after its check passed; PLUS, MINUS, HOME, CAPTURE never sent |
+| A run stopped by its budget while transformed | ended in `explore`, human form (`on_stop`: "human form again") |
+| `A` on a choice list | refused without `confirm`, sent with `confirm: "沒什麼"` |
+| 6 model runs in all | 61 calls, US$1.51; two ended in an API error before the thinking setting was right |
+
+What was measured on the way, and is in the routines as constants:
+
+- **A placed block or not.** Share of strongly changed pixels in the region in front of the character (mid view): placed 0.047 to 0.36 in 30 placements, a press that placed nothing 0.011 to 0.025, waiting 0.028. Threshold 0.04. The lowest "placed" value came with the camera not square to the grid.
+- **Prompts are matched on their white lettering only**, anywhere in the prompt row: the same prompt 0.91 to 1.0, a different one at most 0.67, in night frames and in 21 daytime frames from 2026-11-22. Threshold 0.85.
+- **The pick-up note is matched by its "×" only.** The count goes up when breaks follow each other (×2, ×3) and the colour behind the note changes; matching the whole note failed on both.
+- **Not checked in daylight:** the placement threshold, the note, the "PP full" note, the confirmation question, eating. The `dialog` context itself is not recognised at night (the run above saw `unknown` during the dialogue).
+
 ## Easy to forget
 
 - **The pad becomes player 1.** While it is plugged into the dock, a single-player game listens to it and ignores the Joy-Con. To play by hand, unplug the OTG cable from the dock.
 - **The first press after the console wakes only registers the pad.** The HOME menu shows the controller icon and the cursor does not move; presses after that work. Send one throw-away press before an automated run.
 - **A console woken from sleep shows a lock screen ("A 繼續"), and the capture card may show its own "No Signal" picture for a few seconds first.** A is safe there: it only leads to the HOME menu. Y opens the game news; avoid it.
+- **A press right after another program used the gamepad is sometimes lost** (seen on ZR, X and R). Routines wait for the expected picture and press once more.
+- **A picture can change before the game takes inputs again**: after transforming, `placing` is recognised about 1.5 s before R works.
+- **Walking with the stick leaves the camera at an angle to the grid** (auto-tracking), and then one-cell steps and placements land in unexpected cells. Square it by eye with short right-stick pushes until a row of blocks is level on screen; no routine does this yet.
+- **The facing changes when Magnet Rise ends**, and **the follower Pokémon can take the target or block a step.** Both made a break find nothing; see `guide/magnet.md`.
+- **Only pushing a stick does not keep the console awake** (it slept within 45 minutes of camera nudges every 8 minutes); a button press every 5 minutes did for 70 minutes.
 - **The pad cannot wake a sleeping console.** Left without input for about an hour the console sleeps (last press 20:59, "No Signal" at 22:01 on 2026-11-22). `ap pad` then fails with "the console is not polling the gamepad over USB", so no button reaches it; the owner has to wake it with the power button or their own controller. The wake screen ("A 繼續") sleeps again after about a minute without a press (woke 22:48:07, "No Signal" by 22:49:30), so the owner should also press A there.
 - **Never press A on the HOME menu without checking where the cursor is.** The bottom row holds Nintendo Switch Online and the eShop, which this project does not touch; take a screenshot and read the label first.
 
