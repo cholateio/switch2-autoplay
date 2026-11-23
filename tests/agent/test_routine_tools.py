@@ -1,7 +1,8 @@
+import dataclasses
 import json
 
 import pytest
-from fake_model import FakeModel
+from fake_model import PINNED, FakeModel
 from synth_pack import FakeConsole, FakeScreen, write_pack
 
 from autoplay.core.agent.budget import Budget, Usage
@@ -64,7 +65,7 @@ def session_with(
     pack = load_pack(root)
     source = FakeScreen(*showing)
     pad = FakeConsole(source, {"X": ("bag",), "B": ("explore",)})
-    config = load_agent_config()
+    config = dataclasses.replace(load_agent_config(), **PINNED)
     log = RunLog("test", tmp_path / "runs")
     estop = EStop(hotkey=False)
     pad.attach_estop(estop)

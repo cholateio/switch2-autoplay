@@ -1,3 +1,5 @@
+import dataclasses
+
 """A scripted stand-in for the model, and a session built on the synthetic pack."""
 
 import copy
@@ -14,6 +16,14 @@ from autoplay.core.pack.guard import InputGuard
 from autoplay.core.pack.loader import load_pack
 from autoplay.core.runtime.estop import EStop
 from autoplay.core.runtime.runlog import RunLog
+
+# The numbers in these tests are worked out at these settings, whatever the
+# packaged defaults become.
+PINNED = {
+    "model": "claude-opus-5-5",
+    "keep_screenshots": 4,
+    "step_screenshot_width": 0,
+}
 
 
 class FakeModel:
@@ -78,7 +88,7 @@ def make_session(
     pack = load_pack(write_pack(tmp_path / "pack"))
     source = FakeScreen(*showing)
     pad = pad_class(source, moves or {})
-    config = load_agent_config()
+    config = dataclasses.replace(load_agent_config(), **PINNED)
     log = RunLog("test", tmp_path / "runs")
     estop = EStop(hotkey=False)
     pad.attach_estop(estop)

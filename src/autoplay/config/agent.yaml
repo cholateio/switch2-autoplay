@@ -1,5 +1,5 @@
 # The model loop's settings. Prices per model live in core/agent/budget.py.
-model: claude-opus-5-5
+model: claude-sonnet-5-5
 effort: medium
 # One reply. The budget reserves a full-length reply before every call, so a
 # large value ends runs early; the longest reply measured in M3 was under 300 tokens.
@@ -12,8 +12,8 @@ notes_limit: 2000
 # Screenshots kept in the conversation. Once twice as many have piled up, the
 # oldest are replaced by a line of text, in one go so the cached prefix
 # changes rarely.
-keep_screenshots: 4
+keep_screenshots: 12
 # Width of the screenshots of one turn's tool results, all but the last one;
-# 0 sends every screenshot at screenshot_width. Measured once at 640 with
-# keep_screenshots 12: see "Cost experiments" in docs/DEVELOPMENT.md.
-step_screenshot_width: 0
+# 0 sends every screenshot at screenshot_width. Measured with keep_screenshots
+# 12: see "Cost experiments" in docs/DEVELOPMENT.md.
+step_screenshot_width: 640

@@ -1,3 +1,5 @@
+import dataclasses
+
 import anthropic
 import pytest
 from anthropic.types import Message, MessageTokensCount
@@ -62,7 +64,8 @@ class FakeAnthropic:
 
 def test_request_shape_and_reply_mapping():
     api = FakeAnthropic(response=Message.model_validate(RESPONSE))
-    model = AnthropicModel(load_agent_config(), client=api)
+    config = dataclasses.replace(load_agent_config(), model="claude-opus-5-5")
+    model = AnthropicModel(config, client=api)
     tools = [{"name": "press", "description": "d", "input_schema": {"type": "object"}}]
     messages = [{"role": "user", "content": "go"}]
     reply = model.send("SYSTEM", tools, messages)

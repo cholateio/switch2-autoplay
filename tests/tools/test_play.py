@@ -209,7 +209,9 @@ def test_the_capture_is_closed_when_the_port_cannot_be_opened(
 )
 def test_exit_codes(pack, tmp_path, monkeypatch, capsys, script, max_usd, code):
     Recorder(monkeypatch, tmp_path, script)
-    argv = ["--goal", "g", "--dummy", "--max-usd", max_usd]
+    # The first cap is sized for this model's prices.
+    model = ["--model", "claude-opus-5-5"]
+    argv = ["--goal", "g", "--dummy", "--max-usd", max_usd, *model]
     assert play(pack, *argv, tmp_path=tmp_path) == code
 
 

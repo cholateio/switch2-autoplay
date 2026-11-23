@@ -27,7 +27,7 @@ def write(tmp_path, **changes):
 def test_packaged_defaults():
     config = load_agent_config()
     assert config == AgentConfig(
-        model="claude-opus-5-5",
+        model="claude-sonnet-5-5",
         effort="medium",
         max_tokens=3000,
         max_usd_per_run=2.0,
@@ -35,6 +35,8 @@ def test_packaged_defaults():
         screenshot_width=1280,
         jpeg_quality=80,
         notes_limit=2000,
+        keep_screenshots=12,
+        step_screenshot_width=640,
     )
 
 
