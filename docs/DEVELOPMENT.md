@@ -255,7 +255,7 @@ What was measured on the way, and is in the routines as constants:
 - **A tool result that reports an error may hold text only**; a stopped routine sent its screenshot along and the API answered 400. It reports text now and the model calls `look`.
 - **`require`.** `InputGuard.press(..., require=predicate)` sends only if the predicate holds on the two frames the context was read from and then on the newest frame, fetched and judged immediately before the send. The Y of a break and the A of eating go through it. Three review rounds were about this gap; what cannot be seen is a change during the last predicate call and on the way to the device.
 - **Changes after the whole-batch review** (2026-11-23, late): `ground` and `rise` run only in the placing context and every rise step must show on the picture (0.07 to 0.19 of the middle of the screen changed in 11 steps; hovering in place about 0.01; threshold 0.04); a routine whose function signature does not match its declared arguments fails when the pack loads, not when it is called; the budget prices the part of the prompt that the call before read from the cache as a cache read (for 4 minutes, and not after the history was trimmed), which brings a run with 12 000 to 40 000 prompt tokens to 90% of its cap or more in the unit test.
-- **`checked`.** A pack may list buttons that a context lets through only together with a picture requirement (`checked: {placing: [Y]}` for Pokopia). The model's own `press` and `combo` carry none, so there Y reaches the game only from `break_front`, `break_column` or `break_wall`. Added after the third whole-batch review pass; covered by unit tests, **not run on the console**: the console went to sleep at about 04:50 on 2026-11-23 and the pad cannot wake it. The same holds for the `leave` routine closing the bag with retries and for `break_front shape=low`.
+- **`checked`.** A pack may list buttons that a context lets through only together with a picture requirement (`checked: {placing: [Y]}` for Pokopia). The model's own `press` and `combo` carry none, so there Y reaches the game only from `break_front`, `break_column` or `break_wall`. Added after the third whole-batch review pass; covered by unit tests, and run on the console in the evening of 2026-11-23 (see below). `break_front shape=low` is still **not run on the console**.
 - **Daylight, checked offline** on the 373 screenshots of the afternoon of 2026-11-22 (16:32 to 16:48, taken while the owner played):
   - Bag page and cursor: read in all 17 bag frames, each right by eye.
   - The choice overlay: fires in 4 frames, each a list of options. One is "travel to another town? 是／否"; the un-transform question does not match there, so a routine would not answer it.
@@ -263,6 +263,12 @@ What was measured on the way, and is in the routines as constants:
   - **The pick-up note failed in daylight and was fixed.** The template held the end of the item name 草原的草皮 as well as the "×": of 23 daytime notes (other items) it found 2. Cut down to the sign alone it finds 23 of 23, none in the 350 frames without a note, and at night 17 of 17 with none in 31.
   - The break gate: the one daytime frame with the break prompt has a half-hidden outline (62 px) and is refused, as it should be.
   - The outline alone fires in 96 daytime frames that have no break prompt; the gate needs both, but with one daytime prompt frame this is the least tested part in daylight.
+- **Console, evening of 2026-11-23 (in-game night; the game's clock follows the real one, so no daylight run was possible):** one block placed and taken back with the routines, no model calls.
+  - `place_line` on a cell where the preview was red (the edge of the wooden floor) stopped with "two presses placed nothing" and the bag count unchanged.
+  - `break_front` refused twice because the outline was hidden: at ground level, straight behind a block, the character covers it in the mid view, and in the build view the outline sits on the ground cell. `rise steps=2` then `break_column count=1` took the block; the recut pick-up note template was found (the routine requires it).
+  - A direct `press Y` while transformed was refused: `outcome: refused, needs_check: true`.
+  - `leave`, started transformed with the bag open, closed the bag, answered the un-transform question and ended in explore, human form. No press was lost, so its retry branch did not run.
+  - Bag afterwards: 草原的草皮 99, as before.
 - **Not available in any daytime screenshot, so unchecked in daylight:** the "PP full" note, the un-transform question, the eat prompt, and the picture change of a rise step. Placement no longer depends on the scene (it reads the bag).
 
 ## Easy to forget
@@ -288,6 +294,8 @@ What was measured on the way, and is in the routines as constants:
 - `scripts/win` runs from the repo root, not your current directory.
 - Python's `write_text` does not create parent directories; `runs/` and `fixtures/` must exist before something writes into them.
 - `fixtures/` and `runs/` are gitignored. Never commit game screenshots, recordings or other people's videos; tests use synthetic frames.
+- After the console was off, the game does not resume where it was left: on 2026-11-23 it came back beside the Pokémon Center with a three-screen announcement (context not recognised at night; `A` three times), and a different camera. The game's day and night follow the real clock.
+- Straight behind a block at ground level the break outline is hidden (by the character in the mid view, on the ground cell in the build view): `rise` above it and use `break_column`.
 
 ## Docs map
 
