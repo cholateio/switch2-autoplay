@@ -13,3 +13,7 @@ notes_limit: 2000
 # oldest are replaced by a line of text, in one go so the cached prefix
 # changes rarely.
 keep_screenshots: 4
+# Width of the screenshots of one turn's tool results, all but the last one;
+# 0 sends every screenshot at screenshot_width. Measured once at 640 with
+# keep_screenshots 12: see "Cost experiments" in docs/DEVELOPMENT.md.
+step_screenshot_width: 0

@@ -5,7 +5,14 @@ from typing import Protocol
 from autoplay.core import clock
 from autoplay.core.agent.budget import BudgetExceeded, Usage
 from autoplay.core.agent.session import Session
-from autoplay.core.agent.tools import FINISH, UNKNOWN, Tool, ToolOutput, build_tools
+from autoplay.core.agent.tools import (
+    FINISH,
+    UNKNOWN,
+    Tool,
+    ToolOutput,
+    build_tools,
+    shrink_picture,
+)
 from autoplay.core.controller.base import BUTTON_NAMES
 from autoplay.core.pack.hands import Hands
 from autoplay.core.runtime.estop import EmergencyStop
@@ -107,7 +114,9 @@ picture at each step. Prefer one over doing the same thing input by input; when 
 one stops, look, fix what it reports, and go on from there.
 - Every model turn costs time and money. Put several tool calls in one turn \
 whenever the later ones do not depend on seeing the result of the earlier ones; \
-they run in order, and after one fails no later call of that turn touches the game.
+they run in order, and after one fails no later call of that turn touches the game. \
+Of the screenshots of one turn only the last may be full size; the earlier ones \
+may be smaller. Call `look` when you need to read something small.
 - Some buttons are refused in some contexts, and in a picture that is not \
 recognised. A refused input was not sent. That is a safety rule of this setup: \
 do not look for another way to reach the same effect.
@@ -180,6 +189,27 @@ def trim_pictures(messages: list[dict], keep: int) -> int:
     for content, index in spots[:-keep]:
         content[index] = {"type": "text", "text": DROPPED}
     return len(spots) - keep
+
+
+def thin_step_pictures(results: list[dict], width: int, quality: int) -> int:
+    """Scale the screenshots of one turn's tool results down to `width`, all
+    but the last one, in place; return how many were scaled. The model chose
+    every call of a turn before seeing any of their results, so only the last
+    picture is what it decides on next. Done before the results are first
+    sent, so nothing the model has seen is edited."""
+    spots = [
+        (block["content"], index)
+        for block in results
+        if isinstance(block.get("content"), list)
+        for index, part in enumerate(block["content"])
+        if part.get("type") == "image"
+    ]
+    scaled = 0
+    for content, index in spots[:-1]:
+        small = shrink_picture(content[index], width, quality)
+        scaled += small is not content[index]
+        content[index] = small
+    return scaled
 
 
 def _converse(
@@ -261,6 +291,9 @@ def _converse(
             if output.is_error and failed is None:
                 failed = call.name
             results.append(_result_block(call, output))
+        step_width = session.config.step_screenshot_width
+        if 0 < step_width < session.config.screenshot_width:
+            thin_step_pictures(results, step_width, session.config.jpeg_quality)
         messages.append({"role": "user", "content": results})
 
 

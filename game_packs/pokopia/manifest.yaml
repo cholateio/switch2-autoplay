@@ -20,5 +20,6 @@ confirm:
   choice: [A]
 checked:
   placing: [Y]
+  explore: [ZR]
 routines: routines.py
 on_stop: leave

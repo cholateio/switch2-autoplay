@@ -118,6 +118,16 @@ def encode_frame(bgr: np.ndarray, width: int, quality: int) -> dict:
     }
 
 
+def shrink_picture(block: dict, width: int, quality: int) -> dict:
+    """Return the JPEG image block scaled down to `width`; the block itself
+    when it is not wider or cannot be read."""
+    raw = base64.standard_b64decode(block["source"]["data"])
+    bgr = cv2.imdecode(np.frombuffer(raw, np.uint8), cv2.IMREAD_COLOR)
+    if bgr is None or bgr.shape[1] <= width:
+        return block
+    return encode_frame(bgr, width, quality)
+
+
 class _Toolbox:
     def __init__(self, session: Session) -> None:
         self.s = session

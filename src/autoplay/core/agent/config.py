@@ -10,6 +10,10 @@ from autoplay.core.agent.budget import PRICES
 EFFORTS = ("low", "medium", "high", "xhigh", "max")
 
 
+# Settings where 0 means "off".
+MAY_BE_ZERO = frozenset({"step_screenshot_width"})
+
+
 @dataclass(frozen=True)
 class AgentConfig:
     """Settings of the model loop; the values live in `config/agent.yaml`."""
@@ -23,6 +27,7 @@ class AgentConfig:
     jpeg_quality: int
     notes_limit: int
     keep_screenshots: int = 4
+    step_screenshot_width: int = 0
 
 
 def load_agent_config(path: Path | None = None) -> AgentConfig:
@@ -63,6 +68,8 @@ def load_agent_config(path: Path | None = None) -> AgentConfig:
                 raise ValueError(f"{source}: {name} must be text, got {value!r}")
             continue
         accepted = (int, float) if kind is float else (int,)
+        if name in MAY_BE_ZERO and value == 0 and not isinstance(value, bool):
+            continue
         if isinstance(value, bool) or not isinstance(value, accepted) or value <= 0:
             raise ValueError(
                 f"{source}: {name} must be a positive number, got {value!r}"

@@ -75,3 +75,17 @@ def test_file_that_is_not_a_mapping(tmp_path):
     path.write_text("- 1\n", "utf-8")
     with pytest.raises(ValueError, match="mapping"):
         load_agent_config(path)
+
+
+def test_step_screenshot_width_may_be_left_out_or_zero(tmp_path):
+    assert load_agent_config(write(tmp_path)).step_screenshot_width == 0
+    off = load_agent_config(write(tmp_path, step_screenshot_width=0))
+    assert off.step_screenshot_width == 0
+    on = load_agent_config(write(tmp_path, step_screenshot_width=640))
+    assert on.step_screenshot_width == 640
+
+
+@pytest.mark.parametrize("value", [-1, False, "640", 1.5])
+def test_bad_step_screenshot_width(tmp_path, value):
+    with pytest.raises(ValueError, match="step_screenshot_width"):
+        load_agent_config(write(tmp_path, step_screenshot_width=value))

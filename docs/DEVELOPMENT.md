@@ -174,7 +174,7 @@ for button in ('PLUS', 'MINUS', 'HOME', 'CAPTURE'):
 
 The Pokopia routines need more templates than the contexts do (prompts, the pick-up note, the confirmation question); `fixtures/pokopia/cut_templates.py` (local) records where each was cut from. `fixtures/pokopia/rt.py PORT "routine arg=value" ...` runs routines on the console without the model.
 
-**What the loop does to keep a run small.** The conversation keeps the newest `keep_screenshots` (4) pictures; once twice as many have piled up, the older ones are replaced by a line of text. That edits the history, and a thinking block is bound to the conversation it was made in, so every request (counting tokens as well as sending; both were refused before) carries `thinking.block_binding.prefix_mismatch_behavior: "drop_block"` and the beta header `thinking-binding-controls-2026-08-01`: the API leaves out the thinking made before the edit. After a failed tool call, the later calls of the same turn that would touch the game are not run. Each call is sent with the reply length the budget reserved (4 times the longest reply so far, at least 1500 tokens, at most `max_tokens`).
+**What the loop does to keep a run small.** The conversation keeps the newest `keep_screenshots` (4) pictures; once twice as many have piled up, the older ones are replaced by a line of text. That edits the history, and a thinking block is bound to the conversation it was made in, so every request (counting tokens as well as sending; both were refused before) carries `thinking.block_binding.prefix_mismatch_behavior: "drop_block"` and the beta header `thinking-binding-controls-2026-08-01`: the API leaves out the thinking made before the edit. After a failed tool call, the later calls of the same turn that would touch the game are not run. Each call is sent with the reply length the budget reserved (4 times the longest reply so far, at least 1500 tokens, at most `max_tokens`). With `step_screenshot_width` set (off by default), the screenshots of one turn's tool results are scaled down to that width, all but the last: the model chose every call of a turn before seeing any result, so it decides next on the last picture. This is done before the results are first sent, so it edits nothing the model has seen.
 
 ## M1 acceptance (2026-11-21)
 
@@ -271,6 +271,38 @@ What was measured on the way, and is in the routines as constants:
   - Bag afterwards: 草原的草皮 99, as before.
 - **Not available in any daytime screenshot, so unchecked in daylight:** the "PP full" note, the un-transform question, the eat prompt, and the picture change of a rise step. Placement no longer depends on the scene (it reads the bag).
 
+## Cost experiments (2026-11-23, evening)
+
+Run on the console at in-game night, each from human form on flat grass, the field restored after each (草原的草皮 99 before and after every run). One run per row, so differences of a call or two mean nothing. US$2.50 in all: US$2.28 in runs, US$0.22 for the offline check.
+
+"Single inputs" means the goal forbade every routine tool: the model worked with `look`, `press`, `hold_stick`, `combo` and the guide only. This is the part that carries over to another game.
+
+| Task | Model, settings | Model calls | US$ | Result |
+|---|---|---|---|---|
+| Row of 3 blocks, single inputs | Opus 5.5 | 13 | 0.39 | correct |
+| same | Sonnet 5.5 | 9 | 0.14 | correct |
+| same | Sonnet 5.5, `screenshot_width: 960` | 9 | 0.15 | correct |
+| same | Haiku 5.5 | 20 | 0.03 | failed: 2 of 3 placed, used routine tools against the goal, ended on `max_tokens` |
+| Wall 3 wide 2 high, single inputs | Sonnet 5.5 | 11 | 0.13 | correct |
+| Ring 3 by 3 (8 blocks), single inputs | Sonnet 5.5 | 15 | 0.36 | correct |
+| same, `step_screenshot_width: 640`, `keep_screenshots: 12`, open field | Sonnet 5.5 | 15 | 0.22 | correct |
+| same settings, started at the cliff edge | Sonnet 5.5 | 38 | 0.78 | ring correct, but see below |
+| Wall built and removed with routines | Sonnet 5.5 | 6 | 0.08 | correct (Opus 5.5 that morning: 7 calls, US$0.20) |
+
+What the numbers say:
+
+- **Sonnet 5.5 did every task Opus 5.5 was given, at 36 to 42 % of the cost.** Haiku 5.5 is a fortieth of the price of Opus and could not do the easiest task.
+- **Where the money goes: writing to the cache, 72 to 81 % of every run.** That is new tool results, mostly screenshots (about 1,200 tokens each at 1280 wide), plus the 10,400-token prefix once per run, plus whatever trimming makes the API write again. Cache reads are 7 to 15 %, output 9 to 18 %.
+- **Trimming old screenshots costs more than it saves in a run this short.** Dropping pictures changes the history, so everything after the first dropped picture is written to the cache again at 1.25 times the input price, to save reads at 0.05 times. With `keep_screenshots: 4` it pays for itself only some 30 calls after each trim (worked out from the prices, not measured). It is still what bounds a long run.
+- **A narrower screenshot for every picture saved nothing** (960: US$0.15 against 0.14) and reads small text worse in the offline check.
+- **Smaller pictures for the steps inside a turn, with looser trimming, cut the ring from US$0.36 to 0.22** at the same number of calls. Two runs only, and the other one went badly (next point), so it stays off until it has more runs behind it.
+- **The run at the cliff edge.** A block went to the wrong place; the model, following a line in the guide, switched the move to 碎岩 and pressed `ZR`, which broke a ground cell and left a hole with the block lying in it. Nothing in the picture checks had a say, because `ZR` in explore was an ordinary button. Whether the smaller step pictures had a part in the misplacement cannot be told from one run. Fixed the same evening: `checked: {explore: [ZR]}` in the Pokopia manifest, and `magnet_on` sends `ZR` only while the move label reads 電磁飄浮; the guide line is gone. Checked on the console: a direct `ZR` is refused (`needs_check`), `magnet_on` still transforms. The hole was filled (pick the block up with `Y`, stand beside the hole facing it, build view, `A`).
+- **Single inputs are no longer the expensive way.** On 2026-11-22 a wall by single inputs took 70 calls; now 11. What changed is in the core and the guide, not in routines: several tool calls per turn with a stop at the first failure, and measured recipes for where a block lands. Routines keep two jobs: a picture check before a button that destroys something, and long repetition.
+
+**Offline check of reading a picture** (`fixtures/pokopia/vis_eval.py`, local): 25 questions with known answers on 8 screenshots (item name and counts in the bag, colour and side of the placement preview, prompts, form, dialog text), one pass per setting. Opus 5.5: 25, 24, 24 right at 1280, 960, 640 wide. Sonnet 5.5: 24, 24, 21. Haiku 5.5: 23, 21, 19, with the side of the preview wrong at every width.
+
+The goals, to run the same tasks again: "Place a row of three 草原的草皮 blocks … using only the single-input tools: look, press, hold_stick, combo, read_guide. Do not call any routine tool. Human form only …", then the same with "a wall three blocks wide and two layers high" and "a square ring … 3 by 3 cells with the middle cell left empty"; each ends with reading the count in the bag.
+
 ## Easy to forget
 
 - **The pad becomes player 1.** While it is plugged into the dock, a single-player game listens to it and ignores the Joy-Con. To play by hand, unplug the OTG cable from the dock.
@@ -296,6 +328,9 @@ What was measured on the way, and is in the routines as constants:
 - `fixtures/` and `runs/` are gitignored. Never commit game screenshots, recordings or other people's videos; tests use synthetic frames.
 - After the console was off, the game does not resume where it was left: on 2026-11-23 it came back beside the Pokémon Center with a three-screen announcement (context not recognised at night; `A` three times), and a different camera. The game's day and night follow the real clock.
 - Straight behind a block at ground level the break outline is hidden (by the character in the mid view, on the ground cell in the build view): `rise` above it and use `break_column`.
+- `ZR` in explore uses whichever move is selected, and several of them change the terrain. It is a `checked` button: only `magnet_on` sends it. A new move the model should be able to use needs its own routine with a picture check.
+- `rise` judges each step by how much the picture moved (threshold 0.04). Over plain grass at night it measured 0.033 and 0.035 for a step that had worked or not; running the routine again got through each time.
+- One 原味沙拉 (bag page 1, row 1, column 9 on 2026-11-23) fills PP completely. 蘋野果 are used up, so `eat_berries` finds nothing to eat.
 
 ## Docs map
 

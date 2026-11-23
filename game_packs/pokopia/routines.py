@@ -354,7 +354,14 @@ def magnet_on(hands):
         )
     # A press right after another program left the gamepad is sometimes lost.
     for _ in range(2):
-        hands.press("ZR")
+        # ZR uses whichever move is selected, and other moves break things.
+        _press_if(
+            hands,
+            "ZR",
+            lambda frame: checks.label_score(frame, label, checks.MOVE_LABEL) >= SEEN,
+            "ZR",
+            "the selected move was no longer Magnet Rise",
+        )
         for _ in range(8):
             hands.wait(500)
             if hands.context() == "placing":
