@@ -1,0 +1,43 @@
+states:
+- name: explore
+  kind: template
+  template: templates/explore.png
+  roi: [1537, 997, 78, 80]
+  threshold: 0.8
+- name: placing
+  kind: template
+  template: templates/placing.png
+  roi: [1537, 997, 272, 82]
+  threshold: 0.97
+- name: bag
+  kind: template
+  template: templates/bag.png
+  roi: [1336, 666, 294, 78]
+  threshold: 0.8
+- name: storage
+  kind: template
+  template: templates/storage.png
+  roi: [1006, 1000, 210, 80]
+  threshold: 0.8
+- name: move_wheel
+  kind: template
+  template: templates/move_wheel.png
+  roi: [1769, 1000, 150, 80]
+  threshold: 0.8
+- name: main_menu
+  kind: template
+  template: templates/main_menu.png
+  roi: [1429, 1000, 210, 80]
+  threshold: 0.8
+- name: dialog
+  kind: template
+  template: templates/dialog.png
+  roi: [336, 944, 92, 136]
+  threshold: 0.8
+# Not a context: the cursor beside the highlighted option of a choice list,
+# wherever on screen the list is. The manifest asks for a confirmation there.
+- name: choice
+  kind: template
+  template: templates/choice.png
+  threshold: 0.8
+  overlay: true

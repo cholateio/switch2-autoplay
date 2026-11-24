@@ -1,0 +1,34 @@
+# Timing constants, in milliseconds. This file is the only place they live.
+
+# Shortest time any gamepad state is kept.
+min_state_ms: 16
+# A button press: held this long, then released for release_gap_ms.
+press_ms: 80
+release_gap_ms: 50
+# One step of menu navigation.
+menu_step_ms: 48
+
+# Opening the port can reset the board; HELLO is retried for this long.
+hello_window_ms: 2000
+# Serial link (docs/protocol.md). A command with no reply in ack_timeout_ms is
+# sent again, up to ack_retries more times.
+ack_timeout_ms: 50
+ack_retries: 3
+# While the control loop holds its lease, a PING goes out this often.
+heartbeat_ms: 100
+# A state that has not reported DONE this long after its hold time is asked
+# about, up to done_queries times.
+done_slack_ms: 250
+done_queries: 3
+# How long one call keeps the heartbeat alive. A control loop that stops
+# calling in lets the firmware watchdog release the gamepad.
+lease_ms: 2000
+
+# After an input, the picture counts as settled once consecutive frames stay
+# alike for settle_stable_ms; a picture that keeps moving is given up on
+# after settle_timeout_ms.
+settle_stable_ms: 200
+settle_timeout_ms: 2000
+# A held button can open a screen by itself. Before a second input is added to
+# it, the picture is read again this long after the button went down.
+hold_settle_ms: 500

@@ -1,0 +1,25 @@
+name: pokopia
+home_context: explore
+guide:
+  core: guide/core.md
+  chapters:
+    - {name: bag, file: guide/bag.md, summary: "背包與收納箱的按鍵、怎麼讀道具"}
+    - {name: main-menu, file: guide/main-menu.md, summary: "主選單的項目與離開方法"}
+    - {name: dialog, file: guide/dialog.md, summary: "和寶可夢對話、選項、怎麼結束"}
+    - {name: moves, file: guide/moves.md, summary: "招式的選擇、用途與 PP"}
+    - {name: camera, file: guide/camera.md, summary: "擺放或破壞前必讀：目標是哪一格、第幾層，五種固定視角，看不見時怎麼辦"}
+    - {name: placement, file: guide/placement.md, summary: "人形放方塊和物品：走位、轉向、牆、圍牆、屋簷、掛壁飾；先讀 camera"}
+    - {name: magnet, file: guide/magnet.md, summary: "電磁飄浮：變身與解除、蓋高牆、一次放 4 或 9 塊、拆除、PP 與補充；先讀 camera"}
+states_file: states.yaml
+forbidden:
+  "*": [HOME, CAPTURE]
+  bag: [PLUS]
+  storage: [PLUS, Y]
+  main_menu: [MINUS]
+confirm:
+  choice: [A]
+checked:
+  placing: [Y]
+  explore: [ZR]
+routines: routines.py
+on_stop: leave

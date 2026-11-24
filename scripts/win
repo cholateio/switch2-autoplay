@@ -1,0 +1,83 @@
+#!/usr/bin/env bash
+# Run a command in the project's Windows-native venv: scripts/win <args...>
+# equals `uv.exe run --project <repo UNC> --directory <repo UNC> <args...>`,
+# so relative paths (tests/, runs/, fixtures/) resolve to this single WSL checkout.
+# A leading `pytest` or `ap` is rewritten to `python -m pytest` / `python -m autoplay`.
+# `scripts/win --group hw <args...>` also installs that dependency group first.
+# scripts/win --print-env prints the resolved UV_PROJECT_ENVIRONMENT and exits.
+set -euo pipefail
+
+repo_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)
+repo_unc=$(wslpath -w "$repo_dir")
+
+# cmd.exe started from a WSL (UNC) cwd prints a warning into stdout.
+cd /mnt/c
+
+win_env() {
+    local raw line
+    raw=$(cmd.exe /c "echo %$1%" 2>&1) || true
+    if ! line=$(printf '%s\n' "$raw" | tr -d '\r' | grep -m1 -E '^[A-Za-z]:\\'); then
+        printf 'scripts/win: cannot resolve %%%s%% via cmd.exe; raw output:\n%s\n' "$1" "$raw" >&2
+        return 1
+    fi
+    printf '%s\n' "$line"
+}
+
+local_appdata=$(win_env LOCALAPPDATA) || exit 1
+# The venv must live on a local Windows disk, not on the UNC share.
+export UV_PROJECT_ENVIRONMENT="${local_appdata}\\switch2-autoplay\\venv"
+export WSLENV="${WSLENV:+${WSLENV%:}:}UV_PROJECT_ENVIRONMENT"
+
+if [[ "${1:-}" == "--print-env" ]]; then
+    printf '%s\n' "$UV_PROJECT_ENVIRONMENT"
+    exit 0
+fi
+
+if ! uv=$(command -v uv.exe); then
+    user_profile=$(win_env USERPROFILE) || exit 1
+    uv=$(wslpath -u "${user_profile}\\.local\\bin\\uv.exe")
+    if [[ ! -x "$uv" ]]; then
+        echo "scripts/win: uv.exe not on PATH and not at $uv; see docs/DEVELOPMENT.md" >&2
+        exit 1
+    fi
+fi
+
+# uv puts its own unsigned launcher at venv\Scripts\python.exe. Smart App Control
+# has blocked that launcher (os error 4551) while still allowing the interpreter
+# it starts. A copy of the real interpreter next to pyvenv.cfg runs as the venv's
+# python, so the launcher is replaced whenever the two files differ.
+venv_dir=$(wslpath -u "$UV_PROJECT_ENVIRONMENT")
+if [[ ! -f "$venv_dir/pyvenv.cfg" ]]; then
+    # `uv run` would create the venv and start its launcher in one step, so the
+    # venv is created here first; creating it does not run the launcher.
+    "$uv" venv --quiet --project "$repo_unc" --directory "$repo_unc" "$UV_PROJECT_ENVIRONMENT" >&2
+fi
+home=$(sed -n 's/^home *= *//p' "$venv_dir/pyvenv.cfg" | tr -d '\r' | head -n 1)
+if [[ -z "$home" ]]; then
+    echo "scripts/win: no 'home' line in $venv_dir/pyvenv.cfg; delete that venv and rerun" >&2
+    exit 1
+fi
+base_dir=$(wslpath -u "$home")
+if [[ ! -f "$base_dir/python.exe" ]]; then
+    echo "scripts/win: no python.exe in $home (from pyvenv.cfg); delete the venv and rerun" >&2
+    exit 1
+fi
+if ! cmp -s "$base_dir/python.exe" "$venv_dir/Scripts/python.exe"; then
+    cp "$base_dir"/python.exe "$base_dir"/python3*.dll "$base_dir"/vcruntime*.dll "$venv_dir/Scripts/"
+fi
+
+# Leading `--group NAME` pairs are options for `uv run`, not part of the command.
+uv_opts=()
+while [[ "${1:-}" == "--group" && $# -ge 2 ]]; do
+    uv_opts+=("$1" "$2")
+    shift 2
+done
+
+# Smart App Control also blocks the unsigned console-script launchers (pytest.exe,
+# ap.exe) with os error 4551, so route these through `python -m`.
+case "${1:-}" in
+    pytest) shift; set -- python -m pytest "$@" ;;
+    ap) shift; set -- python -m autoplay "$@" ;;
+esac
+
+exec "$uv" run --project "$repo_unc" --directory "$repo_unc" "${uv_opts[@]}" "$@"
