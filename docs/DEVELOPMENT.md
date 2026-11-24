@@ -270,6 +270,7 @@ What was measured on the way, and is in the routines as constants:
   - `leave`, started transformed with the bag open, closed the bag, answered the un-transform question and ended in explore, human form. No press was lost, so its retry branch did not run.
   - Bag afterwards: 草原的草皮 99, as before.
 - **Not available in any daytime screenshot, so unchecked in daylight:** the "PP full" note, the un-transform question, the eat prompt, and the picture change of a rise step. Placement no longer depends on the scene (it reads the bag).
+- **The daytime console check was waived by the owner on 2026-11-24** and M4 was closed without it. The items in the line above stay unchecked in daylight; `break_front shape=low` has never been run on the console.
 
 ## Cost experiments (2026-11-23, evening)
 
