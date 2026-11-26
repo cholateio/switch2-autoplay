@@ -151,6 +151,8 @@ game_packs/pokopia/
 | **M4 移動與放置原語** | 校準「推搖桿 N ms 走多遠」、鏡頭重置、`walk_to`/`face`/`place_block` 閉環；以電磁飄浮為主要建造方式，PP 不足時改用一般放置（見第 9 節） | 在空地放出一排 5 格方塊並用畫面確認每格；失敗自動重放 |
 | **M5 影片 → 建築** | `analyze_build_video`、`lookup_recipe`、材料清單、蒐集與建造流程 | 給 Larvitar 短片，在已解鎖的沙盒存檔上蓋出評審認可「像」的建築；人全程不介入（可觀看） |
 
+**M5 已由 `2026-11-26-m5-blueprint-build-design.md` 取代**（2026-11-26）：拆成 M5a、M5b、M5c，蒐集與查配方移出。上表的 M5 一列保留作歷史。
+
 M0–M2 是 core，M3 起才碰 Pokopia 知識。M5 之前若 Pokopia 證實不可行，可換遊戲，M0–M2 不變。
 
 ## 6. 留給 builder 的事
@@ -183,7 +185,7 @@ M0–M2 是 core，M3 起才碰 Pokopia 知識。M5 之前若 Pokopia 證實不�
 - **空地**（user 決定）：user 手動清好一塊 10×10 平地，M4/M5 在那裡進行。
 - **API 帳號與預算**（查證 2026-11-05，來源 platform.claude.com `api-credits-for-subscribers`、code.claude.com `agent-sdk/quickstart`）：
   Messages API 與 Agent SDK 都走 Console 計費（API key），claude.ai 訂閱額度不涵蓋；Max 方案每月附 US$100 Console API 額度
-  可用於 Agent SDK 與 Claude API（不含 Claude Code），Pro 方案沒有。user 每月上限 US$50，agent 以設定檔熔斷。
+  可用於 Agent SDK 與 Claude API（不含 Claude Code），Pro 方案沒有。user 每月上限 US$50，agent 以設定檔熔斷。（2026-12-01 起改為暫定 US$80，見 `2026-11-26-m5-blueprint-build-design.md` 第 2 節。）
   key 放 gitignore 的 `.env`，由 Claude 建範本後用記事本開給 user 填。user 為 Max 以上方案，附帶額度足夠 MVP。
 - **本機 GPU 的角色**（我的決定）：RTX 5060 Ti 16 GB 在 MVP 只跑快迴路的 OCR 與模板比對。慢迴路的模型後端做成
   可抽換介面（`anthropic` / `local`），但**本機 VLM 的評估延到 M3 之後**：M3 會記錄每次模型呼叫的類型、token 與延遲，
