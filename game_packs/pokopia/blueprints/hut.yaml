@@ -1,0 +1,12 @@
+# A blueprint given as construction operations: a 5 by 4 room, three layers of
+# wall with a door opening in the front, under a gabled roof that overhangs by one.
+name: hut
+axes: {row0: back, col0: left, layer0: bottom}
+palette:
+  G: 草原的草皮
+  S: 石塊
+ops:
+  - {op: fill, item: G, x: [0, 4], y: [0, 3], z: 0}
+  - {op: walls, item: S, x: [0, 4], y: [0, 3], z: [1, 3]}
+  - {op: clear, x: 2, y: 3, z: [1, 2]}
+  - {op: roof, item: S, z: 3, x: [-1, 5], y: [-1, 4], style: gable_x, overhang: 1}

@@ -333,3 +333,265 @@ def test_oversized_content_is_cut_for_the_drawing(tmp_path):
     assert all(len(layer.rows) == 64 for layer in blueprint.layers)
     assert all(len(row) == 64 for layer in blueprint.layers for row in layer.rows)
     assert len(bp.preview(write(tmp_path, data))) < 20_000_000
+
+
+def from_ops(*ops, pieces=None) -> dict:
+    data = {
+        "name": "ops",
+        "axes": {"row0": "back", "col0": "left", "layer0": "bottom"},
+        "palette": {"G": GRASS, "S": STONE},
+        "ops": list(ops),
+    }
+    if pieces is not None:
+        data["pieces"] = pieces
+    return data
+
+
+def rows_of(data: dict) -> list[list[str]]:
+    blueprint, errors = bp.parse(data)
+    assert errors == []
+    return [layer.rows for layer in blueprint.layers]
+
+
+def test_the_ops_sample_expands_to_a_hut_with_a_closed_gable():
+    path = SAMPLES / "hut.yaml"
+    report = bp.check(path)
+    assert report.errors == []
+    assert (
+        report.summary[1]
+        == "  from 4 operation(s); row 0, col 0 of layer 0 is their x=-1, y=-1, z=0"
+    )
+    layers = rows_of(yaml.safe_load(path.read_text(encoding="utf-8")))
+    assert layers[1] == [
+        ".......",
+        ".SSSSS.",
+        ".S...S.",
+        ".S...S.",
+        ".SS.SS.",
+        ".......",
+    ]
+    # The eaves hang one cell out at the wall-top layer; the end walls are
+    # raised under the slope so that the gable is closed.
+    assert layers[3][0] == layers[3][5] == "SSSSSSS"
+    assert layers[4] == [
+        ".......",
+        "SSSSSSS",
+        ".S...S.",
+        ".S...S.",
+        "SSSSSSS",
+        ".......",
+    ]
+    assert layers[5][2] == layers[5][3] == "SSSSSSS"
+    assert "<svg" in bp.preview(path)
+
+
+def test_fill_walls_and_clear_overwrite_in_order():
+    layers = rows_of(
+        from_ops(
+            {"op": "fill", "item": "G", "x": [0, 3], "y": [0, 2], "z": 0},
+            {"op": "walls", "item": "S", "x": [3, 0], "y": [0, 2], "z": [0, 1]},
+            {"op": "clear", "x": 1, "y": 2, "z": [0, 1]},
+        )
+    )
+    assert layers == [["SSSS", "SGGS", "S.SS"], ["SSSS", "S..S", "S.SS"]]
+
+
+def test_a_hip_roof_steps_in_on_four_sides_and_a_cap_flattens_it():
+    hip = {"op": "roof", "item": "S", "z": 0, "x": [0, 4], "y": [0, 4]}
+    assert rows_of(from_ops(hip)) == [
+        ["SSSSS", "S...S", "S...S", "S...S", "SSSSS"],
+        [".....", ".SSS.", ".S.S.", ".SSS.", "....."],
+        [".....", ".....", "..S..", ".....", "....."],
+    ]
+    assert rows_of(from_ops({**hip, "cap": 1}))[1:] == [
+        [".....", ".SSS.", ".SSS.", ".SSS.", "....."],
+    ]
+    assert rows_of(from_ops({**hip, "style": "flat"})) == [["SSSSS"] * 5]
+
+
+def test_roof_parts_join_into_an_l_with_a_valley():
+    layers = rows_of(
+        from_ops(
+            {
+                "op": "roof",
+                "item": "S",
+                "z": 0,
+                "parts": [
+                    {"x": [0, 5], "y": [0, 2], "style": "gable_x"},
+                    {"x": [0, 2], "y": [0, 5], "style": "gable_y"},
+                ],
+            }
+        )
+    )
+    # One block per column: the two ridges meet and neither wing cuts the other.
+    assert layers == [
+        ["S.SSSS", "......", "S.SSSS", "S.S...", "S.S...", "S.S..."],
+        [".S....", "SSSSSS", ".S....", ".S....", ".S....", ".S...."],
+    ]
+
+
+def test_only_a_wall_that_reaches_the_eaves_is_raised():
+    layers = rows_of(
+        from_ops(
+            {"op": "fill", "item": "G", "x": [0, 4], "y": [0, 2], "z": 0},
+            {"op": "fill", "item": "G", "x": 0, "y": [0, 2], "z": [1, 2]},
+            {"op": "roof", "item": "S", "z": 3, "x": [0, 4], "y": [0, 2]}
+            | {"style": "gable_x"},
+        )
+    )
+    # Column x=0 reaches layer 2 and grows to the ridge; x=4 stops at the floor.
+    assert layers[3] == ["SSSSS", "G....", "SSSSS"]
+    assert layers[4] == [".....", "SSSSS", "....."]
+    assert layers[1] == layers[2] == ["G....", "G....", "G...."]
+
+
+def test_pieces_of_an_ops_blueprint_use_the_ops_coordinates():
+    data = from_ops(
+        {"op": "fill", "item": "G", "x": [-1, 3], "y": [-2, 1], "z": [2, 3]},
+        pieces=[
+            {"item": "木門", "kind": "door", "layer": 3, "cells": [[-2, -1], [1, 3]]},
+            {
+                "item": "木柵欄",
+                "kind": "panel",
+                "layer": 3,
+                "area": {"x": [-1, 1], "y": [-2, 0], "ring": True},
+            },
+        ],
+    )
+    blueprint, errors = bp.parse(data)
+    assert errors == []
+    assert blueprint.origin == (-1, -2, 2)
+    assert [piece.layer for piece in blueprint.pieces] == [1, 1]
+    assert blueprint.pieces[0].cells == [[0, 0], [3, 4]]
+    assert blueprint.pieces[1].cells == [
+        [0, 0],
+        [0, 1],
+        [0, 2],
+        [1, 0],
+        [1, 2],
+        [2, 0],
+        [2, 1],
+        [2, 2],
+    ]
+    data["pieces"][0]["cells"] = [[2, 0]]
+    data["pieces"][1]["layer"] = 1
+    assert bp.parse(data)[1] == [
+        "piece 0: cell [2, 0] is not a [row, col] inside",
+        "piece 1: layer must be a layer index",
+    ]
+
+
+def test_an_area_names_a_rectangle_of_cells_in_a_layered_blueprint():
+    data = corner_wall()
+    data["pieces"] = [
+        {"item": "小麥", "kind": "plant", "layer": 1, "area": {"x": [1, 3], "y": 2}}
+    ]
+    blueprint, errors = bp.parse(data)
+    assert errors == []
+    assert blueprint.pieces[0].cells == [[2, 1], [2, 2], [2, 3]]
+    data["pieces"][0]["cells"] = [[0, 0]]
+    assert bp.parse(data)[1] == ["piece 0: area is {x, y, ring} and replaces cells"]
+
+
+BOX = {"op": "fill", "item": "S", "x": [0, 1], "y": [0, 1], "z": 0}
+
+
+@pytest.mark.parametrize(
+    ("ops", "expected"),
+    [
+        ([], "ops: the list is empty"),
+        ([{**BOX, "op": "dig"}], "op 0: op must be one of"),
+        ([BOX, {**BOX, "item": "X"}], "op 1: item 'X' is not in the palette"),
+        ([{**BOX, "x": [0, "a"]}], "op 0 x: must be a whole number or [low, high]"),
+        ([{**BOX, "x": [0, 64]}], "op 0 x: [0, 64] spans more than 64"),
+        ([{**BOX, "z": [-1, 31]}], "op 0 z: [-1, 31] spans more than 32"),
+        ([{**BOX, "depth": 2}], "op 0: unknown keys ['depth']"),
+        ([{**BOX, "op": "clear", "item": "S"}], "op 0: unknown keys ['item']"),
+        ([{"op": "clear", "x": 0, "y": 0, "z": 0}], "ops: leave no blocks"),
+        ([{**BOX, "op": "roof", "style": "dome"}], "op 0: style must be one of"),
+        ([{**BOX, "op": "roof", "z": [0, 1]}], "op 0: z must be the layer of"),
+        (
+            [{**BOX, "op": "roof", "parts": [{"x": 0, "y": 0}]}],
+            "op 0: give x and y on the roof or on its parts",
+        ),
+        (
+            [{"op": "roof", "item": "S", "z": 0, "parts": [{"x": 0}]}],
+            "op 0 part 0 y: must be a whole number or [low, high]",
+        ),
+        ([BOX] * 101, "ops: 101 is above the limit of 100"),
+        (
+            [BOX, {**BOX, "x": [100, 101]}],
+            "ops: the result is 102 wide, the limit is 64",
+        ),
+    ],
+)
+def test_a_wrong_operation_is_refused_with_the_place(tmp_path, ops, expected):
+    errors = bp.check(write(tmp_path, from_ops(*ops))).errors
+    assert any(error.startswith(expected) for error in errors), errors
+
+
+def test_ops_replace_size_and_layers():
+    data = from_ops(BOX)
+    data["size"] = {"width": 2, "depth": 2, "layers": 1}
+    data["layers"] = [{"rows": ["SS", "SS"]}]
+    blueprint, errors = bp.parse(data)
+    assert errors == [
+        "size: not allowed beside ops, which set it",
+        "layers: not allowed beside ops, which set it",
+    ]
+    assert (blueprint.width, blueprint.depth, len(blueprint.layers)) == (2, 2, 1)
+
+
+def test_ops_that_spread_too_far_are_refused_and_drawn_bounded(tmp_path):
+    data = from_ops(
+        {"op": "fill", "item": "S", "x": [-64, -1], "y": [-64, -1], "z": [-32, -1]},
+        {"op": "fill", "item": "G", "x": [64, 127], "y": [64, 127], "z": [32, 63]},
+    )
+    blueprint, errors = bp.parse(data)
+    assert errors == [
+        "ops: the result is 192 wide, the limit is 64",
+        "ops: the result is 192 deep, the limit is 64",
+        "ops: the result is 96 layers, the limit is 32",
+    ]
+    assert (blueprint.width, blueprint.depth, len(blueprint.layers)) == (64, 64, 32)
+    assert len(bp.preview(write(tmp_path, data))) < 20_000_000
+
+
+def test_a_blueprint_may_sit_anywhere_in_the_ops_coordinates():
+    far = {"op": "fill", "item": "S", "x": -1000, "y": 5000, "z": [70, 71]}
+    roof = {"op": "roof", "item": "G", "x": -1000, "y": 5000, "z": 72}
+    blueprint, errors = bp.parse(from_ops(far, roof))
+    assert errors == []
+    assert blueprint.origin == (-1000, 5000, 70)
+    assert [layer.rows for layer in blueprint.layers] == [["S"], ["S"], ["G"]]
+
+
+def test_the_cells_kept_while_expanding_are_bounded():
+    tiles = [
+        {
+            "op": "fill",
+            "item": "S",
+            "x": [64 * i, 64 * i + 63],
+            "y": [0, 63],
+            "z": [0, 31],
+        }
+        for i in range(30)
+    ]
+    errors: list[str] = []
+    cells, _ = bp._expand(from_ops(*tiles), {"S": STONE}, errors)
+    assert len(errors) == 1
+    assert errors[0].startswith("op 3: more than 262144 blocks before it")
+    assert len(cells) == 3 * 64 * 64 * 32
+
+
+def test_an_area_ring_must_be_a_boolean():
+    data = corner_wall()
+    data["pieces"] = [
+        {
+            "item": "小麥",
+            "kind": "plant",
+            "layer": 1,
+            "area": {"x": [1, 3], "y": [1, 3], "ring": "false"},
+        }
+    ]
+    assert bp.parse(data)[1] == ["piece 0: area ring must be true or false"]

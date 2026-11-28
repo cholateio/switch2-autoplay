@@ -17,11 +17,36 @@ A blueprint is a YAML mapping:
         kind: panel | door | furniture | plant | decoration | beam | other
         layer: <index>
         cells: [[row, col], ...]  # or a sentence, in a draft
+        area: {x: [c0, c1], y: [r0, r1], ring: true}   # instead of cells: a
+                                  # rectangle of cells, or only its outline
         facing: <text>            # optional
         confidence: ...           # optional
         by: human                 # optional; the only value until a piece builder exists
     source: <text>                # optional
     unsure: [<text>, ...]         # optional
+
+Instead of `size` and `layers` a blueprint may give construction operations,
+which are expanded into the same grid; later operations overwrite earlier ones:
+
+    ops:
+      - {op: fill,  item: S, x: [x0, x1], y: [y0, y1], z: [z0, z1]}   # solid box
+      - {op: walls, item: S, x: ..., y: ..., z: ...}    # the four sides of a box
+      - {op: clear, x: ..., y: ..., z: ...}             # openings
+      - {op: roof,  item: S, z: z0, x: ..., y: ..., style: hip, overhang: 0}
+      - {op: roof,  item: S, z: z0, overhang: 1, cap: 3,
+         parts: [{x: ..., y: ..., style: gable_x}, {x: ..., y: ...}]}
+
+x is the column, y the row and z the layer; ranges are inclusive, a single
+number is a range of one, and coordinates may be negative (an overhang): the
+grid is the bounding box of the result, and pieces of such a blueprint are
+given in the same coordinates. There are at most 100 operations, and a range is
+at most 64 long (32 for z). A roof is one block per column, rising one layer
+per cell inwards from the edges of its rectangle: from all four (`hip`), from
+the two y edges (`gable_x`, the ridge runs along x), from the two x edges
+(`gable_y`) or not at all (`flat`). `z` is the layer of its lowest row, `cap`
+flattens it above that many layers, and several `parts` join into one roof with
+valleys. `overhang` tells how far the rectangle reaches past the walls; a wall
+that ends right under the lowest roof row is raised to meet the roof above it.
 """
 
 from collections import Counter
@@ -47,10 +72,42 @@ BUILDERS = ("human",)
 # A draft that fails the checks is still drawn, so the drawing must stay bounded.
 MAX_SIDE = 64
 MAX_LAYERS = 32
+MAX_OPS = 100
+MAX_CELLS = 2 * MAX_SIDE * MAX_SIDE * MAX_LAYERS
+MAX_ROOF_PARTS = 8
+ROOF_STYLES = ("hip", "gable_x", "gable_y", "flat")
+_BOX = {"op", "item", "x", "y", "z"}
+_OPS = {
+    "fill": _BOX,
+    "walls": _BOX,
+    "clear": _BOX - {"item"},
+    "roof": _BOX | {"style", "overhang", "cap", "parts"},
+}
+_PART = {"x", "y", "style"}
 ITEMS_FILE = Path(__file__).with_name("items.yaml")
-_TOP = {"name", "size", "axes", "palette", "layers", "pieces", "source", "unsure"}
+_TOP = {
+    "name",
+    "size",
+    "axes",
+    "palette",
+    "layers",
+    "ops",
+    "pieces",
+    "source",
+    "unsure",
+}
 _LAYER = {"rows", "confidence", "note", "frames"}
-_PIECE = {"item", "kind", "layer", "cells", "facing", "confidence", "by", "note"}
+_PIECE = {
+    "item",
+    "kind",
+    "layer",
+    "cells",
+    "area",
+    "facing",
+    "confidence",
+    "by",
+    "note",
+}
 _FALLBACK = (
     "#e57373",
     "#64b5f6",
@@ -95,6 +152,10 @@ class Blueprint:
     pieces: list[Piece]
     source: str = ""
     unsure: list[str] = field(default_factory=list)
+    # Of a blueprint given as operations: how many there were, and the x, y, z
+    # of the operations that grid cell [row 0, col 0] of layer 0 stands for.
+    ops: int = 0
+    origin: tuple[int, int, int] = (0, 0, 0)
 
 
 @dataclass
@@ -172,8 +233,234 @@ def _parse_layers(data: dict, width: int, depth: int, errors: list[str]) -> list
     return layers
 
 
+def _whole(value: object) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool)
+
+
+def _span(value: object, limit: int, where: str, errors: list[str]) -> range | None:
+    pair = [value, value] if _whole(value) else value
+    if not (isinstance(pair, list) and len(pair) == 2 and all(map(_whole, pair))):
+        errors.append(f"{where}: must be a whole number or [low, high]")
+        return None
+    low, high = sorted(pair)
+    # Bounded so that no operation can cost more than one full grid of work.
+    if high - low >= limit:
+        errors.append(f"{where}: [{low}, {high}] spans more than {limit}")
+        return None
+    return range(low, high + 1)
+
+
+def _roof(op: dict, where: str, cells: dict, errors: list[str]) -> None:
+    base = op.get("z")
+    if not _whole(base):
+        errors.append(f"{where}: z must be the layer of the lowest roof row")
+        return
+    overhang = op.get("overhang", 0)
+    cap = op.get("cap")
+    if not _whole(overhang) or not 0 <= overhang < MAX_SIDE:
+        errors.append(f"{where}: overhang must be a whole number, 0 or more")
+        return
+    if cap is not None and (not _whole(cap) or cap < 0):
+        errors.append(f"{where}: cap must be a whole number, 0 or more")
+        return
+    raw_parts = [op]
+    if "parts" in op:
+        raw_parts = op["parts"]
+        if "x" in op or "y" in op:
+            errors.append(f"{where}: give x and y on the roof or on its parts")
+            return
+        if not isinstance(raw_parts, list) or not raw_parts:
+            errors.append(f"{where}: parts must be a list of {{x, y}}")
+            return
+        if len(raw_parts) > MAX_ROOF_PARTS:
+            errors.append(f"{where}: more than {MAX_ROOF_PARTS} parts")
+            return
+    parts = []
+    for number, raw in enumerate(raw_parts):
+        spot = where if raw is op else f"{where} part {number}"
+        if not isinstance(raw, dict):
+            errors.append(f"{spot}: must be a mapping with x and y")
+            return
+        if raw is not op and raw.keys() - _PART:
+            unknown = sorted(str(k) for k in raw.keys() - _PART)
+            errors.append(f"{spot}: unknown keys {unknown}")
+        style = raw.get("style", op.get("style", "hip"))
+        if style not in ROOF_STYLES:
+            errors.append(f"{spot}: style must be one of {list(ROOF_STYLES)}")
+            return
+        xs = _span(raw.get("x"), MAX_SIDE, f"{spot} x", errors)
+        ys = _span(raw.get("y"), MAX_SIDE, f"{spot} y", errors)
+        if xs is None or ys is None:
+            return
+        parts.append((xs, ys, style))
+    rise: dict[tuple[int, int], int] = {}
+    for xs, ys, style in parts:
+        for x in xs:
+            for y in ys:
+                from_x = min(x - xs[0], xs[-1] - x)
+                from_y = min(y - ys[0], ys[-1] - y)
+                height = {
+                    "hip": min(from_x, from_y),
+                    "gable_x": from_y,
+                    "gable_y": from_x,
+                    "flat": 0,
+                }[style]
+                if cap is not None:
+                    height = min(height, cap)
+                rise[(x, y)] = max(rise.get((x, y), 0), height)
+    for (x, y), height in rise.items():
+        cells[(x, y, base + height)] = op["item"]
+    for xs, ys, _ in parts:
+        wall_x = range(xs[0] + overhang, xs[-1] - overhang + 1)
+        wall_y = range(ys[0] + overhang, ys[-1] - overhang + 1)
+        for x in wall_x:
+            for y in wall_y:
+                if x not in (wall_x[0], wall_x[-1]) and y not in (
+                    wall_y[0],
+                    wall_y[-1],
+                ):
+                    continue
+                top = base + rise[(x, y)]
+                # Only a wall that reaches the eaves is raised; a floor far
+                # below the roof must not grow into a pillar.
+                for z in range(top - 1, base - 2, -1):
+                    if (x, y, z) in cells:
+                        for gap in range(z + 1, top):
+                            cells[(x, y, gap)] = cells[(x, y, z)]
+                        break
+
+
+def _expand(data: dict, palette: dict[str, str], errors: list[str]) -> tuple[dict, int]:
+    """The cells the operations leave, keyed by (x, y, z), and how many
+    operations were read."""
+    raw_ops = data.get("ops")
+    if not isinstance(raw_ops, list) or not raw_ops:
+        errors.append("ops: the list is empty")
+        return {}, 0
+    if len(raw_ops) > MAX_OPS:
+        errors.append(f"ops: {len(raw_ops)} is above the limit of {MAX_OPS}")
+        raw_ops = raw_ops[:MAX_OPS]
+    cells: dict[tuple[int, int, int], str] = {}
+    for index, op in enumerate(raw_ops):
+        where = f"op {index}"
+        # No valid result holds more cells than one grid; twice that leaves
+        # room for what a later `clear` removes and keeps a faulty draft small.
+        if len(cells) > MAX_CELLS:
+            errors.append(
+                f"{where}: more than {MAX_CELLS} blocks before it; this and the "
+                "later operations are dropped"
+            )
+            break
+        kind = op.get("op") if isinstance(op, dict) else None
+        if not isinstance(kind, str) or kind not in _OPS:
+            errors.append(f"{where}: op must be one of {list(_OPS)}")
+            continue
+        if op.keys() - _OPS[kind]:
+            unknown = sorted(str(k) for k in op.keys() - _OPS[kind])
+            errors.append(f"{where}: unknown keys {unknown}")
+        if kind != "clear":
+            op = {**op, "item": str(op.get("item"))}
+            if op["item"] not in palette:
+                errors.append(f"{where}: item {op['item']!r} is not in the palette")
+                continue
+        if kind == "roof":
+            _roof(op, where, cells, errors)
+            continue
+        xs = _span(op.get("x"), MAX_SIDE, f"{where} x", errors)
+        ys = _span(op.get("y"), MAX_SIDE, f"{where} y", errors)
+        zs = _span(op.get("z"), MAX_LAYERS, f"{where} z", errors)
+        if xs is None or ys is None or zs is None:
+            continue
+        for z in zs:
+            for y in ys:
+                for x in xs:
+                    if kind == "clear":
+                        cells.pop((x, y, z), None)
+                    elif kind == "fill" or x in (xs[0], xs[-1]) or y in (ys[0], ys[-1]):
+                        cells[(x, y, z)] = op["item"]
+    if not cells:
+        errors.append("ops: leave no blocks")
+    return cells, len(raw_ops)
+
+
+def _grid(
+    cells: dict, errors: list[str]
+) -> tuple[int, int, list[Layer], tuple[int, int, int]]:
+    if not cells:
+        return 0, 0, [], (0, 0, 0)
+    low = [min(cell[axis] for cell in cells) for axis in range(3)]
+    spans = [max(cell[axis] for cell in cells) - low[axis] + 1 for axis in range(3)]
+    for name, span, limit in zip(
+        ("wide", "deep", "layers"), spans, (MAX_SIDE, MAX_SIDE, MAX_LAYERS), strict=True
+    ):
+        if span > limit:
+            errors.append(f"ops: the result is {span} {name}, the limit is {limit}")
+    width, depth, count = (
+        min(spans[0], MAX_SIDE),
+        min(spans[1], MAX_SIDE),
+        min(spans[2], MAX_LAYERS),
+    )
+    layers = [
+        Layer(
+            rows=[
+                "".join(
+                    cells.get((col + low[0], row + low[1], level + low[2]), EMPTY)
+                    for col in range(width)
+                )
+                for row in range(depth)
+            ]
+        )
+        for level in range(count)
+    ]
+    return width, depth, layers, (low[0], low[1], low[2])
+
+
+def _piece_cells(
+    raw: dict, where: str, errors: list[str]
+) -> list[list[int]] | str | None:
+    """The cells a piece names, in the blueprint's own coordinates."""
+    if "area" in raw:
+        area = raw["area"]
+        if (
+            "cells" in raw
+            or not isinstance(area, dict)
+            or area.keys()
+            - {
+                "x",
+                "y",
+                "ring",
+            }
+        ):
+            errors.append(f"{where}: area is {{x, y, ring}} and replaces cells")
+            return None
+        xs = _span(area.get("x"), MAX_SIDE, f"{where} area x", errors)
+        ys = _span(area.get("y"), MAX_SIDE, f"{where} area y", errors)
+        if xs is None or ys is None:
+            return None
+        ring = area.get("ring", False)
+        if not isinstance(ring, bool):
+            errors.append(f"{where}: area ring must be true or false")
+            return None
+        return [
+            [y, x]
+            for y in ys
+            for x in xs
+            if not ring or x in (xs[0], xs[-1]) or y in (ys[0], ys[-1])
+        ]
+    cells = raw.get("cells")
+    if isinstance(cells, list) or (isinstance(cells, str) and cells):
+        return cells
+    errors.append(f"{where}: needs `cells`, a list of [row, col]")
+    return None
+
+
 def _parse_pieces(
-    data: dict, width: int, depth: int, count: int, errors: list[str]
+    data: dict,
+    width: int,
+    depth: int,
+    count: int,
+    errors: list[str],
+    origin: tuple[int, int, int] = (0, 0, 0),
 ) -> list[Piece]:
     raw_pieces = data.get("pieces") or []
     if not isinstance(raw_pieces, list):
@@ -194,26 +481,37 @@ def _parse_pieces(
             errors.append(f"{where}: kind must be one of {list(KINDS)}")
             kind = "other"
         layer = raw.get("layer")
-        if not isinstance(layer, int) or isinstance(layer, bool) or layer < 0:
+        if not _whole(layer) or layer < origin[2]:
             errors.append(f"{where}: layer must be a layer index")
             layer = None
-        elif layer >= count:
-            errors.append(f"{where}: layer {layer} is above the top layer {count - 1}")
-        cells = raw.get("cells")
-        if isinstance(cells, list):
-            for cell in cells:
-                inside = (
-                    isinstance(cell, list)
-                    and len(cell) == 2
-                    and all(isinstance(v, int) for v in cell)
-                    and 0 <= cell[0] < max(depth, 1)
-                    and 0 <= cell[1] < max(width, 1)
-                )
-                if not inside:
-                    errors.append(f"{where}: cell {cell} is not a [row, col] inside")
-        elif not isinstance(cells, str) or not cells:
-            errors.append(f"{where}: needs `cells`, a list of [row, col]")
-            cells = ""
+        elif layer - origin[2] >= count:
+            errors.append(
+                f"{where}: layer {layer} is above the top layer {count - 1 + origin[2]}"
+            )
+        else:
+            layer -= origin[2]
+        named = _piece_cells(raw, where, errors)
+        cells: list | str = ""
+        if isinstance(named, str):
+            cells = named
+        elif named is not None:
+            cells = []
+            outside = []
+            for cell in named[: MAX_SIDE * MAX_SIDE]:
+                if not (
+                    isinstance(cell, list) and len(cell) == 2 and all(map(_whole, cell))
+                ):
+                    outside.append(cell)
+                    continue
+                row, col = cell[0] - origin[1], cell[1] - origin[0]
+                if 0 <= row < max(depth, 1) and 0 <= col < max(width, 1):
+                    cells.append([row, col])
+                else:
+                    outside.append(cell)
+            for cell in outside[:5]:
+                errors.append(f"{where}: cell {cell} is not a [row, col] inside")
+            if len(outside) > 5:
+                errors.append(f"{where}: {len(outside) - 5} more cell(s) not inside")
         by = raw.get("by", "human")
         if by not in BUILDERS:
             errors.append(f"{where}: by must be one of {list(BUILDERS)}")
@@ -243,9 +541,13 @@ def parse(data: dict) -> tuple[Blueprint, list[str]]:
     errors: list[str] = []
     if data.keys() - _TOP:
         errors.append(f"unknown keys {sorted(str(k) for k in data.keys() - _TOP)}")
+    from_ops = "ops" in data
     size = data.get("size") if isinstance(data.get("size"), dict) else {}
-    dims = {}
-    for key in ("width", "depth", "layers"):
+    dims = {"width": 0, "depth": 0, "layers": 0}
+    for key in ("size", "layers") if from_ops else ():
+        if key in data:
+            errors.append(f"{key}: not allowed beside ops, which set it")
+    for key in () if from_ops else tuple(dims):
         value = size.get(key)
         if not _positive(value):
             errors.append(f"size.{key}: must be a whole number above zero")
@@ -273,7 +575,12 @@ def parse(data: dict) -> tuple[Blueprint, list[str]]:
             errors.append(
                 f"palette: {symbol!r} names {item!r}, which is not in the item list"
             )
-    layers = _parse_layers(data, dims["width"], dims["depth"], errors)
+    origin, op_count = (0, 0, 0), 0
+    if from_ops:
+        cells, op_count = _expand(data, palette, errors)
+        dims["width"], dims["depth"], layers, origin = _grid(cells, errors)
+    else:
+        layers = _parse_layers(data, dims["width"], dims["depth"], errors)
     if layers and dims["layers"] and len(layers) != dims["layers"]:
         errors.append(
             f"layers: there are {len(layers)}, size.layers is {dims['layers']}"
@@ -285,7 +592,9 @@ def parse(data: dict) -> tuple[Blueprint, list[str]]:
                     f"layer {index} row {number}: symbol {symbol!r} is not in "
                     "the palette"
                 )
-    pieces = _parse_pieces(data, dims["width"], dims["depth"], len(layers), errors)
+    pieces = _parse_pieces(
+        data, dims["width"], dims["depth"], len(layers), errors, origin
+    )
     unsure = data.get("unsure") or []
     blueprint = Blueprint(
         name=str(data.get("name") or ""),
@@ -296,6 +605,8 @@ def parse(data: dict) -> tuple[Blueprint, list[str]]:
         pieces=pieces,
         source=str(data.get("source") or ""),
         unsure=[str(line) for line in unsure] if isinstance(unsure, list) else [],
+        ops=op_count,
+        origin=origin,
     )
     if not blueprint.name:
         errors.append("name: is missing")
@@ -366,6 +677,12 @@ def _summary(blueprint: Blueprint) -> list[str]:
         f"{len(blueprint.pieces)} piece(s)"
     )
     lines = [head]
+    if blueprint.ops:
+        x, y, z = blueprint.origin
+        lines.append(
+            f"  from {blueprint.ops} operation(s); row 0, col 0 of layer 0 is "
+            f"their x={x}, y={y}, z={z}"
+        )
     lines += [f"  {item}: {count}" for item, count in total.items()]
     for index, counts in enumerate(per_layer):
         detail = ", ".join(f"{item} {count}" for item, count in counts.items())
