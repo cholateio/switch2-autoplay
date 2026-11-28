@@ -1,0 +1,10 @@
+name: corner-wall
+size: {width: 5, depth: 5, layers: 3}
+axes: {row0: back, col0: left, layer0: bottom}
+palette:
+  G: 草原的草皮
+  S: 石塊
+layers:
+  - rows: [GGGGG, GGGGG, GGGGG, GGGGG, GGGGG]
+  - rows: [SSSSS, ".....", ".....", ".....", "....."]
+  - rows: [SSSSS, ".....", ".....", ".....", "....."]

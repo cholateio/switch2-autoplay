@@ -59,6 +59,7 @@ The installer refuses to run under the default execution policy; `-ExecutionPoli
 | `scripts/flash COM4` | Flash `firmware/build/` to the ESP32-S3 |
 | `scripts/flash COM4 build-demo` | Flash the demo build (see Firmware) |
 | `scripts/win python scripts/hello.py COM4` | Check the serial link: prints the firmware's INFO and the PING round-trip time |
+| `uv run ap blueprint check game_packs/pokopia/blueprints/corner-wall.yaml` | Check a blueprint and print its materials; `preview` instead of `check` writes a local HTML page beside it. The format is described at the top of `game_packs/pokopia/blueprint.py`. A file outside a pack needs `--pack DIR` |
 | `scripts/win ap pad --port COM4 press A` | Drive the gamepad by hand: `press`, `hold`, `stick`, `release-all`, `info`; `--port dummy` prints what would be sent |
 | `scripts/win ap soak --port COM4 --seq DPAD_RIGHT,DPAD_LEFT --cycles 100` | Press a sequence many times and check on the capture that every press changed the picture and every cycle returned to its start; failures are saved under `runs/` |
 | `scripts/win ap template --image shot.png --name STATE --states-file fixtures/m2/states.yaml` | Cut a template out of a screenshot (drag a box, or pass `--roi x,y,w,h`) and add the state to a states file; `--kind black` adds a black-screen state |

@@ -1,0 +1,7 @@
+name: row
+size: {width: 5, depth: 1, layers: 1}
+axes: {row0: back, col0: left, layer0: bottom}
+palette:
+  G: 草原的草皮
+layers:
+  - rows: [GGGGG]

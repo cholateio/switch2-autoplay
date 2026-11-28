@@ -1,0 +1,5 @@
+# Blocks a blueprint may name, each with the colour the preview draws it in.
+# Only blocks the routines have placed or that sit in the bag belong here.
+blocks:
+  草原的草皮: "#7cb342"
+  石塊: "#9e9e9e"

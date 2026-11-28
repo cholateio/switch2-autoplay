@@ -5,6 +5,7 @@ import sys
 from importlib.metadata import version
 
 from autoplay.core.tools import (
+    blueprint,
     capture_view,
     classify,
     latency,
@@ -28,6 +29,7 @@ _REGISTRARS = (
     latency.register,
     lessons_cli.register,
     play.register,
+    blueprint.register,
 )
 
 

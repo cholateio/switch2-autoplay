@@ -81,4 +81,6 @@ firmware/test_host/build/
 
 # Game pack templates are cut from screenshots; the agent memory is per machine
 game_packs/*/templates/
+# Written by `ap blueprint preview`
+*.preview.html
 /memory/
